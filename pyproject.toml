@@ -1,0 +1,72 @@
+[build-system]
+requires = ["hatchling>=1.25"]
+build-backend = "hatchling.build"
+
+[project]
+name = "forge-coding-agent"
+version = "0.1.0"
+description = "A safe, local-first CLI coding agent with sessions, memory, and skills."
+readme = "README.md"
+requires-python = ">=3.11"
+license = {text = "MIT"}
+authors = [{name = "coding-agent contributors"}]
+dependencies = [
+  "openai>=1.52,<3",
+  "typer>=0.12,<1",
+  "rich>=13.8,<15",
+  "prompt-toolkit>=3.0.47,<4",
+  "pydantic>=2.8,<3",
+  "PyYAML>=6.0,<7",
+  "platformdirs>=4.3,<5",
+  "tiktoken>=0.8,<1",
+  "psutil>=5.9,<8",
+]
+
+[project.optional-dependencies]
+dev = [
+  "bandit>=1.7.10",
+  "build>=1.2.2",
+  "mypy>=1.11",
+  "pip-audit>=2.7.3",
+  "pytest>=8.3",
+  "pytest-cov>=5",
+  "ruff>=0.7",
+  "types-psutil>=5.9",
+  "types-PyYAML>=6.0",
+]
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/coding_agent"]
+
+[tool.ruff]
+target-version = "py311"
+line-length = 100
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "B", "UP", "SIM", "RUF"]
+
+[tool.mypy]
+python_version = "3.11"
+strict = true
+packages = ["coding_agent"]
+
+[[tool.mypy.overrides]]
+module = ["yaml", "psutil", "typer", "typer.*"]
+ignore_missing_imports = true
+
+[[tool.mypy.overrides]]
+module = "coding_agent.cli"
+disallow_untyped_decorators = false
+
+[tool.pytest.ini_options]
+addopts = "-ra --strict-markers --strict-config"
+testpaths = ["tests"]
+
+[tool.coverage.run]
+branch = true
+source = ["coding_agent"]
+
+[tool.coverage.report]
+show_missing = true
+skip_covered = true
+fail_under = 85
