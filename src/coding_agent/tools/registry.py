@@ -17,6 +17,7 @@ from coding_agent.tools.filesystem import (
     WriteFileTool,
 )
 from coding_agent.tools.plan import UpdatePlanTool
+from coding_agent.tools.skill import ActivateSkillTool, ReadSkillResourceTool
 
 
 class ToolRegistry:
@@ -70,5 +71,7 @@ def default_registry() -> ToolRegistry:
             EditFileTool(),
             WriteFileTool(),
             RunCommandTool(),
+            ActivateSkillTool(),
+            ReadSkillResourceTool(),
         ]
     )

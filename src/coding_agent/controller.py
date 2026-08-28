@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import re
 import time
 from collections.abc import Callable
 from dataclasses import dataclass
@@ -11,10 +12,13 @@ from uuid import uuid4
 from coding_agent.config import Settings
 from coding_agent.context import ContextManager, estimate_tokens
 from coding_agent.events import AgentEvent, AgentState, EventKind, ToolCall
+from coding_agent.memory import MemoryStore
 from coding_agent.model_client import ModelClient
+from coding_agent.project import project_id
 from coding_agent.safety.approval import ApprovalPolicy
 from coding_agent.safety.paths import WorkspacePaths
 from coding_agent.session import SessionError, SessionStore
+from coding_agent.skills import SkillError, SkillRegistry
 from coding_agent.tools.base import EventSink, ToolContext, WorkingState
 from coding_agent.tools.registry import ToolRegistry
 
@@ -38,6 +42,9 @@ class AgentController:
         tools: ToolRegistry,
         sessions: SessionStore,
         approval: ApprovalPolicy,
+        memory: MemoryStore | None = None,
+        skills: SkillRegistry | None = None,
+        agents_instructions: str = "",
         session_id: str | None = None,
         event_sink: EventSink | None = None,
         monotonic: Callable[[], float] = time.monotonic,
@@ -47,9 +54,13 @@ class AgentController:
         self.tools = tools
         self.sessions = sessions
         self.approval = approval
+        self.memory = memory
+        self.skills = skills
+        self.agents_instructions = agents_instructions
         self.session_id = session_id or sessions.create(
             {
                 "workspace": str(settings.cwd.resolve()),
+                "project_id": project_id(settings.cwd),
                 "model": settings.model.name,
             }
         )
@@ -104,7 +115,13 @@ class AgentController:
         self.conversation.append(message)
         self.sessions.append_message(self.session_id, message)
 
-    def _system_prompt(self) -> str:
+    def _system_prompt(
+        self,
+        *,
+        memory_text: str,
+        explicit_skills: list[str],
+        turn_id: str,
+    ) -> str:
         sections = [
             "You are Forge, a local CLI coding agent. Complete the user's task using the provided local tools.",
             (
@@ -115,7 +132,47 @@ class AgentController:
             ),
             f"Workspace boundary: {self.settings.cwd}",
         ]
+        if self.agents_instructions:
+            sections.append("Trusted repository instructions:\n" + self.agents_instructions)
+        if memory_text:
+            sections.append(memory_text)
+        if self.skills is not None:
+            catalog = self.skills.catalog() if self.settings.skills.implicit_activation else []
+            if catalog:
+                compact_catalog = [
+                    {
+                        "name": item["name"],
+                        "description": item["description"],
+                        "source": item["source"],
+                    }
+                    for item in catalog
+                    if item["enabled"]
+                ]
+                sections.append(
+                    "Available skills (activate only when relevant):\n"
+                    + json.dumps(compact_catalog, ensure_ascii=False)
+                )
+            requested = list(dict.fromkeys([*sorted(self.skills.active), *explicit_skills]))
+            for name in requested:
+                try:
+                    content = self.skills.activate(name)
+                except SkillError as exc:
+                    sections.append(f"Requested skill {name!r} could not be activated: {exc}")
+                    continue
+                if name not in self.working.active_skills:
+                    self.working.active_skills.append(name)
+                if name in explicit_skills:
+                    self._emit(
+                        EventKind.SKILL,
+                        turn_id=turn_id,
+                        data={"name": name, "action": "activated", "source": "explicit"},
+                    )
+                sections.append(f"Active skill {name}:\n{content}")
         return "\n\n".join(sections)
+
+    @staticmethod
+    def _explicit_skills(user_input: str) -> list[str]:
+        return list(dict.fromkeys(re.findall(r"(?<!\w)\$([a-z0-9][a-z0-9_-]{0,63})", user_input)))
 
     def _tool_context(self, turn_id: str) -> ToolContext:
         def tool_sink(event: AgentEvent) -> None:
@@ -131,6 +188,7 @@ class AgentController:
             working=self.working,
             event_sink=tool_sink,
             command_timeout=self.settings.agent.command_timeout,
+            skills=self.skills,
         )
 
     def manual_compact(self) -> str:
@@ -149,7 +207,21 @@ class AgentController:
         started = self.monotonic()
         self.working.goal = user_input
         self._append_message({"role": "user", "content": user_input})
-        system_prompt = self._system_prompt()
+        explicit_skills = self._explicit_skills(user_input)
+        memory_text = ""
+        if self.memory is not None:
+            paths = re.findall(r"(?<!\w)@([^\s]+)", user_input)
+            memories = self.memory.query(
+                user_input,
+                paths=paths,
+                max_tokens=self.settings.memory.max_injected_tokens,
+            )
+            memory_text = self.memory.format_for_prompt(memories)
+        system_prompt = self._system_prompt(
+            memory_text=memory_text,
+            explicit_skills=explicit_skills,
+            turn_id=turn_id,
+        )
         steps = 0
         last_text = ""
         failed_signature: str | None = None

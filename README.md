@@ -13,8 +13,11 @@ Implemented modules:
 - screened command execution with secret stripping, timeout, process-tree termination, and bounded output;
 - a local model-tool-observation loop with visible plans, loop guards, budgets, cancellation, and JSONL sessions;
 - resumable conversation state and deterministic context compaction that preserves the original transcript.
+- opt-in, approved project memory with secret filtering, deterministic retrieval, and project isolation;
+- hash-invalidated trust for project configuration, hierarchical AGENTS.md instructions, and repository skills;
+- user/repository SKILL.md discovery, conflict diagnostics, lazy activation, and confined resource reads.
 
-The interactive CLI, project memory, trusted project instructions, and skills are intentionally
-delivered in later modules and are not advertised as available yet.
+The interactive CLI/TUI is intentionally delivered in a later module and is not advertised as
+available yet.
 
 The implementation does not use an agent framework or a hosted code-execution/file service.

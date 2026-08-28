@@ -2,13 +2,16 @@ from __future__ import annotations
 
 from abc import ABC, abstractmethod
 from collections.abc import Callable
-from typing import Any, ClassVar
+from typing import TYPE_CHECKING, Any, ClassVar
 
 from pydantic import BaseModel, Field
 
 from coding_agent.events import AgentEvent, AgentState, EventKind, ToolResult
 from coding_agent.safety.approval import ApprovalDecision, ApprovalPolicy, ApprovalRequest
 from coding_agent.safety.paths import WorkspacePaths
+
+if TYPE_CHECKING:
+    from coding_agent.skills import SkillRegistry
 
 class WorkingState(BaseModel):
     goal: str = ""
@@ -33,6 +36,7 @@ class ToolContext:
         working: WorkingState,
         event_sink: EventSink | None = None,
         command_timeout: int = 120,
+        skills: SkillRegistry | None = None,
     ) -> None:
         self.workspace = workspace
         self.approval = approval
@@ -41,6 +45,7 @@ class ToolContext:
         self.working = working
         self.event_sink = event_sink
         self.command_timeout = command_timeout
+        self.skills = skills
 
     def emit(
         self,
