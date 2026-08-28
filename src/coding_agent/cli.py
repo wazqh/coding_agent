@@ -205,7 +205,8 @@ def main(
             output="rich",
             trust_project=trust_project,
         )
-        assert isinstance(renderer, RichRenderer)
+        if not isinstance(renderer, RichRenderer):
+            raise ConfigError("interactive mode requires rich output")
         history = controller.settings.data_dir / "prompt-history.txt"
         history.parent.mkdir(parents=True, exist_ok=True)
         shell = InteractiveShell(
@@ -269,7 +270,8 @@ def resume_command(
             trust_project=trust_project,
             session_id=session_id,
         )
-        assert isinstance(renderer, RichRenderer)
+        if not isinstance(renderer, RichRenderer):
+            raise ConfigError("interactive mode requires rich output")
         shell = InteractiveShell(
             controller=controller,
             controller_factory=factory,

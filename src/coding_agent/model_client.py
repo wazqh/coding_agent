@@ -132,7 +132,7 @@ class ModelClient:
                 return
             except Exception as exc:
                 if not emitted and attempt < self.max_retries and self._retryable(exc):
-                    delay = min(8.0, 0.5 * (2**attempt)) + random.random() * 0.1
+                    delay = min(8.0, 0.5 * (2**attempt)) + random.random() * 0.1  # nosec B311
                     self._sleep(delay)
                     continue
                 yield ModelStreamEvent(type="error", error=str(exc))

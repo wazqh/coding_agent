@@ -2,14 +2,13 @@ from __future__ import annotations
 
 import os
 import re
-import subprocess
+import subprocess  # nosec B404
 import tempfile
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
 import psutil
-
 
 MAX_CAPTURE_BYTES = 32 * 1024
 SECRET_NAME = re.compile(r"(?:KEY|TOKEN|SECRET|PASSWORD|PASSWD|CREDENTIAL)", re.IGNORECASE)
@@ -30,7 +29,9 @@ class CommandPolicy:
         re.compile(r"\bremove-item\b[^\r\n]*-recurse", re.IGNORECASE),
         re.compile(r"\b(?:del|rd)\b[^\r\n]*/s", re.IGNORECASE),
         re.compile(r"\b(?:mkfs(?:\.\w+)?|diskpart|format)\b", re.IGNORECASE),
-        re.compile(r"\b(?:shutdown|reboot|halt|poweroff|stop-computer|restart-computer)\b", re.IGNORECASE),
+        re.compile(
+            r"\b(?:shutdown|reboot|halt|poweroff|stop-computer|restart-computer)\b", re.IGNORECASE
+        ),
         re.compile(r"\bdd\s+[^\r\n]*\bof=", re.IGNORECASE),
         re.compile(r":\(\)\s*\{\s*:\|:&\s*\}", re.IGNORECASE),
     )
@@ -47,7 +48,9 @@ class CommandPolicy:
             return CommandClassification(False, False, "empty, NUL, or multiline command")
         for pattern in self._forbidden:
             if pattern.search(normalized):
-                return CommandClassification(False, False, "command matches a destructive safety rule")
+                return CommandClassification(
+                    False, False, "command matches a destructive safety rule"
+                )
         has_operators = bool(re.search(r"[;&|<>`]", normalized))
         if not has_operators and any(pattern.match(normalized) for pattern in self._read_only):
             return CommandClassification(True, False, "read-only allowlist")
@@ -113,7 +116,7 @@ def run_subprocess(
         creationflags = 0
         start_new_session = True
     with tempfile.TemporaryFile() as stdout, tempfile.TemporaryFile() as stderr:
-        process = subprocess.Popen(  # noqa: S603  # nosec B602 - screened and approved
+        process = subprocess.Popen(  # nosec B602
             argv,
             shell=shell,
             executable=executable,

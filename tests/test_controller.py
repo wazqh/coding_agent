@@ -1,11 +1,9 @@
 from __future__ import annotations
 
 from collections.abc import Callable, Iterator
-from pathlib import Path
 from typing import Any
 
 import pytest
-
 from conftest import FakeModel
 
 from coding_agent.config import Settings
@@ -195,7 +193,8 @@ def test_time_budget_and_keyboard_interrupt_are_persisted(settings: Settings) ->
             yield ModelStreamEvent(type="done")
 
     cancelled = make_controller(
-        settings, InterruptModel()  # type: ignore[arg-type]
+        settings,
+        InterruptModel(),  # type: ignore[arg-type]
     ).run_turn("cancel me")
     assert cancelled.status is AgentState.CANCELLED
     assert cancelled.exit_code == 130

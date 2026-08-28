@@ -3,7 +3,6 @@ from __future__ import annotations
 import difflib
 import re
 from pathlib import Path
-from typing import Literal
 
 from pydantic import BaseModel, Field
 
@@ -11,7 +10,6 @@ from coding_agent.events import ToolResult
 from coding_agent.safety.approval import ApprovalRequest
 from coding_agent.safety.paths import atomic_write_text, sha256_file, sha256_text
 from coding_agent.tools.base import Tool, ToolContext
-
 
 MAX_TEXT_CHARS = 2 * 1024 * 1024
 MAX_DIFF_CHARS = 32 * 1024
@@ -53,7 +51,9 @@ class ListFilesArgs(BaseModel):
 
 class ListFilesTool(Tool):
     name = "list_files"
-    description = "List workspace files under a relative directory. Never reads outside the workspace."
+    description = (
+        "List workspace files under a relative directory. Never reads outside the workspace."
+    )
     args_model = ListFilesArgs
 
     def execute(self, args: BaseModel, context: ToolContext) -> ToolResult:
@@ -253,7 +253,9 @@ class WriteFileArgs(BaseModel):
 
 class WriteFileTool(Tool):
     name = "write_file"
-    description = "Create or overwrite a UTF-8 file atomically; overwrites require expected SHA-256."
+    description = (
+        "Create or overwrite a UTF-8 file atomically; overwrites require expected SHA-256."
+    )
     args_model = WriteFileArgs
 
     def execute(self, args: BaseModel, context: ToolContext) -> ToolResult:
@@ -290,9 +292,7 @@ class WriteFileTool(Tool):
             )
         ):
             return ToolResult(ok=False, code="APPROVAL_DENIED", summary="file write was denied")
-        current_path = context.workspace.resolve(
-            values.path, must_exist=exists, file_only=True
-        )
+        current_path = context.workspace.resolve(values.path, must_exist=exists, file_only=True)
         if current_path != path or (not exists and current_path.exists()):
             return ToolResult(
                 ok=False,
@@ -314,9 +314,7 @@ class WriteFileTool(Tool):
         return ToolResult(
             ok=True,
             code="OK",
-            summary=(
-                f"overwrote {values.path}" if exists else f"created {values.path}"
-            ),
+            summary=(f"overwrote {values.path}" if exists else f"created {values.path}"),
             data={"path": values.path, "sha256": new_hash, "diff": patch},
             truncated=truncated,
         )

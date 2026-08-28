@@ -80,4 +80,3 @@ def atomic_write_text(path: Path, content: str) -> None:
     finally:
         if temp_path is not None:
             temp_path.unlink(missing_ok=True)
-

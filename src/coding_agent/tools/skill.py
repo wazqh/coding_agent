@@ -59,4 +59,3 @@ class ReadSkillResourceTool(Tool):
             summary=f"read {values.name}/{values.path}",
             data={"name": values.name, "path": values.path, "content": content},
         )
-

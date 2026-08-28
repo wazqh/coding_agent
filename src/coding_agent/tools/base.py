@@ -13,6 +13,7 @@ from coding_agent.safety.paths import WorkspacePaths
 if TYPE_CHECKING:
     from coding_agent.skills import SkillRegistry
 
+
 class WorkingState(BaseModel):
     goal: str = ""
     plan: list[dict[str, str]] = Field(default_factory=list)

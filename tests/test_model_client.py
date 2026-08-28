@@ -104,4 +104,3 @@ def test_retry_before_output_and_invalid_json() -> None:
     final = list(malformed.stream([], []))[-1]
     assert final.type == "error"
     assert "invalid JSON" in (final.error or "")
-

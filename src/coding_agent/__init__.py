@@ -3,5 +3,4 @@
 from coding_agent.events import AgentEvent, AgentState, ToolResult
 
 __all__ = ["AgentEvent", "AgentState", "ToolResult"]
-__version__ = "0.1.0"
-
+__version__ = "1.0.0"

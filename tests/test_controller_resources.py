@@ -83,7 +83,9 @@ def test_model_can_activate_discovered_skill_lazily(settings: Settings) -> None:
             [
                 ModelStreamEvent(
                     type="tool_calls",
-                    tool_calls=[ToolCall(id="skill", name="activate_skill", arguments={"name": "demo"})],
+                    tool_calls=[
+                        ToolCall(id="skill", name="activate_skill", arguments={"name": "demo"})
+                    ],
                 ),
                 ModelStreamEvent(type="done", finish_reason="tool_calls"),
             ],
@@ -96,4 +98,3 @@ def test_model_can_activate_discovered_skill_lazily(settings: Settings) -> None:
     assert controller.working.active_skills == ["demo"]
     tool_messages = [message for message in model.requests[1][0] if message.get("role") == "tool"]
     assert "Follow the demo workflow" in tool_messages[-1]["content"]
-

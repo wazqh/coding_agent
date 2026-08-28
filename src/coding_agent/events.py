@@ -78,4 +78,3 @@ class ModelStreamEvent(BaseModel):
     usage: Usage | None = None
     finish_reason: str | None = None
     error: str | None = None
-

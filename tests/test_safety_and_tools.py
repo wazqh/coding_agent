@@ -73,9 +73,7 @@ def test_read_edit_write_hash_and_approval(tmp_path: Path) -> None:
         ctx,
     )
     assert edited.ok and path.read_text(encoding="utf-8") == "value = 2\n"
-    missing_hash = registry.execute(
-        "write_file", {"path": "demo.py", "content": "x\n"}, ctx
-    )
+    missing_hash = registry.execute("write_file", {"path": "demo.py", "content": "x\n"}, ctx)
     assert missing_hash.code == "HASH_REQUIRED"
     overwritten = registry.execute(
         "write_file",
@@ -179,17 +177,13 @@ def test_command_policy_secret_filter_and_execution(tmp_path: Path) -> None:
 
 def test_command_timeout_output_bound_and_tool_rejection(tmp_path: Path) -> None:
     quote = '"'
-    large_command = (
-        f"{quote}{sys.executable}{quote} -c {quote}print('x'*40000){quote}"
-    )
+    large_command = f"{quote}{sys.executable}{quote} -c {quote}print('x'*40000){quote}"
     large = run_subprocess(large_command, cwd=tmp_path, timeout=10)
     assert large["exit_code"] == 0
     assert large["truncated"]
     assert "output truncated" in large["stdout"]
 
-    timeout_command = (
-        f"{quote}{sys.executable}{quote} -c {quote}import time; time.sleep(5){quote}"
-    )
+    timeout_command = f"{quote}{sys.executable}{quote} -c {quote}import time; time.sleep(5){quote}"
     timed_out = run_subprocess(timeout_command, cwd=tmp_path, timeout=1)
     assert timed_out["timed_out"]
 
@@ -207,9 +201,7 @@ def test_list_and_search_are_bounded_to_workspace(tmp_path: Path) -> None:
     (tmp_path / "src" / "two.txt").write_text("nothing\nneedle\n", encoding="utf-8")
     registry = default_registry()
     ctx = context(tmp_path)
-    listed = registry.execute(
-        "list_files", {"path": "src", "pattern": "*", "max_results": 10}, ctx
-    )
+    listed = registry.execute("list_files", {"path": "src", "pattern": "*", "max_results": 10}, ctx)
     searched = registry.execute(
         "search_text", {"path": "src", "pattern": "needle", "max_results": 10}, ctx
     )

@@ -8,6 +8,9 @@ pytest-cache-files-*/
 .mypy_cache/
 .ruff_cache/
 .coverage
+coverage.json
+coverage.xml
+eval-results*.json
 htmlcov/
 dist/
 build/

@@ -40,4 +40,3 @@ class UpdatePlanTool(Tool):
             summary=f"plan updated with {len(plan)} steps",
             data={"plan": plan},
         )
-

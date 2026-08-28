@@ -1,0 +1,14 @@
+[agent]
+max_steps = 24
+context_window = 32768
+
+[memory]
+enabled = false
+max_injected_tokens = 2000
+
+[skills]
+implicit_activation = true
+
+[ui]
+theme = "forge-dark"
+raw_tool_output = false

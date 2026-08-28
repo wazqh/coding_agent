@@ -2,9 +2,9 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from coding_agent.skills import SkillRegistry
 from coding_agent.safety.approval import ApprovalPolicy
 from coding_agent.safety.paths import WorkspacePaths
+from coding_agent.skills import SkillRegistry
 from coding_agent.tools.base import ToolContext, WorkingState
 from coding_agent.tools.registry import default_registry
 
@@ -28,13 +28,9 @@ def test_skill_tools(tmp_path: Path) -> None:
         skills=skills,
     )
     registry = default_registry()
-    inactive = registry.execute(
-        "read_skill_resource", {"name": "demo", "path": "note.txt"}, ctx
-    )
+    inactive = registry.execute("read_skill_resource", {"name": "demo", "path": "note.txt"}, ctx)
     assert inactive.code == "SKILL_ERROR"
     active = registry.execute("activate_skill", {"name": "demo"}, ctx)
     assert active.ok and "demo" in working.active_skills
-    resource = registry.execute(
-        "read_skill_resource", {"name": "demo", "path": "note.txt"}, ctx
-    )
+    resource = registry.execute("read_skill_resource", {"name": "demo", "path": "note.txt"}, ctx)
     assert resource.ok and resource.data["content"] == "note"

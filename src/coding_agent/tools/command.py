@@ -15,7 +15,10 @@ class RunCommandArgs(BaseModel):
 
 class RunCommandTool(Tool):
     name = "run_command"
-    description = "Run a command in the workspace with danger screening, approval, timeout, and bounded output."
+    description = (
+        "Run a command in the workspace with danger screening, approval, timeout, "
+        "and bounded output."
+    )
     args_model = RunCommandArgs
 
     def __init__(self, policy: CommandPolicy | None = None) -> None:
@@ -60,4 +63,3 @@ class RunCommandTool(Tool):
             retryable=bool(result["timed_out"]),
             truncated=bool(result["truncated"]),
         )
-

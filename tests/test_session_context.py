@@ -49,4 +49,3 @@ def test_context_compaction_preserves_recent_and_summary() -> None:
     assert "Completed changes: read" in summary
     assert "Pending work: test" in summary
     assert estimate_tokens(compacted) > 0
-

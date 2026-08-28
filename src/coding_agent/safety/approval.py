@@ -61,4 +61,3 @@ class ApprovalPolicy:
         elif decision is ApprovalDecision.DENY:
             self.denied = True
         return decision
-

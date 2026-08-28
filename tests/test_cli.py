@@ -15,7 +15,7 @@ def test_version_and_help() -> None:
     runner = CliRunner()
     version = runner.invoke(app, ["--version"])
     help_result = runner.invoke(app, ["--help"])
-    assert version.exit_code == 0 and "0.1.0" in version.stdout
+    assert version.exit_code == 0 and "1.0.0" in version.stdout
     assert help_result.exit_code == 0
     assert "sessions" in help_result.stdout and "resume" in help_result.stdout
 

@@ -37,4 +37,3 @@ def test_invalid_config_and_workspace(tmp_path: Path) -> None:
     (tmp_path / "coding-agent.toml").write_text("[agent]\nmax_steps=0", encoding="utf-8")
     with pytest.raises(ConfigError):
         load_settings(tmp_path, trusted_project=True, data_dir=tmp_path / "data")
-

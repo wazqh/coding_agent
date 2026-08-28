@@ -48,9 +48,7 @@ def project_resource_files(workspace: Path) -> list[Path]:
         resources.append(config)
     for directory, names, files in os.walk(root, followlinks=False):
         names[:] = [
-            name
-            for name in names
-            if name != ".git" and not (Path(directory) / name).is_symlink()
+            name for name in names if name != ".git" and not (Path(directory) / name).is_symlink()
         ]
         if "AGENTS.md" in files:
             resources.append((Path(directory) / "AGENTS.md").resolve())
@@ -59,9 +57,7 @@ def project_resource_files(workspace: Path) -> list[Path]:
     skill_root = root / ".agents" / "skills"
     if skill_root.is_dir():
         for directory, names, files in os.walk(skill_root, followlinks=False):
-            names[:] = [
-                name for name in names if not (Path(directory) / name).is_symlink()
-            ]
+            names[:] = [name for name in names if not (Path(directory) / name).is_symlink()]
             for name in files:
                 resolved = (Path(directory) / name).resolve()
                 try:
