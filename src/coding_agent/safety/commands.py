@@ -107,7 +107,7 @@ def run_subprocess(
         argv: str | list[str] = command
         shell = True
         executable = os.environ.get("COMSPEC", "cmd.exe")
-        creationflags = subprocess.CREATE_NEW_PROCESS_GROUP
+        creationflags = int(getattr(subprocess, "CREATE_NEW_PROCESS_GROUP", 0))
         start_new_session = False
     else:
         argv = ["/bin/sh", "-c", command]
