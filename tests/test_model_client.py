@@ -9,22 +9,15 @@ from coding_agent.model_client import ModelClient
 
 
 class FakeStream:
-    def __init__(self, events: list[dict[str, Any]], completion: dict[str, Any]) -> None:
-        self.events = events
-        self.completion = completion
+    def __init__(self, chunks: list[dict[str, Any]]) -> None:
+        self.chunks = chunks
         self.closed = False
 
-    def __enter__(self) -> FakeStream:
-        return self
-
-    def __exit__(self, exc_type, exc, exc_tb) -> None:
-        self.closed = True
-
     def __iter__(self) -> Iterator[dict[str, Any]]:
-        return iter(self.events)
+        return iter(self.chunks)
 
-    def get_final_completion(self) -> dict[str, Any]:
-        return self.completion
+    def close(self) -> None:
+        self.closed = True
 
 
 class FakeCompletions:
@@ -32,7 +25,7 @@ class FakeCompletions:
         self.streams = streams
         self.requests: list[dict[str, Any]] = []
 
-    def stream(self, **kwargs: Any) -> FakeStream:
+    def create(self, **kwargs: Any) -> FakeStream:
         self.requests.append(kwargs)
         value = self.streams.pop(0)
         if isinstance(value, Exception):
@@ -46,49 +39,119 @@ class FakeClient:
         self.chat.completions = FakeCompletions(streams)
 
 
-def test_stream_assembles_tool_call_and_thought_signature() -> None:
+def test_stream_assembles_indexless_gemini_tool_call_and_signature() -> None:
     stream = FakeStream(
-        events=[{"type": "content.delta", "delta": "Checking. "}],
-        completion={
-            "choices": [
-                {
-                    "finish_reason": "tool_calls",
-                    "message": {
-                        "content": None,
-                        "tool_calls": [
-                            {
-                                "id": "call_1",
-                                "type": "function",
-                                "function": {
-                                    "name": "read_file",
-                                    "arguments": '{"path":"a.py"}',
-                                    "thought_signature": "sig-1",
-                                },
-                            }
-                        ],
-                    },
-                }
-            ],
-            "usage": {"prompt_tokens": 2, "completion_tokens": 3, "total_tokens": 5},
-        },
+        [
+            {"choices": [{"index": None, "delta": {"content": "Checking. "}}]},
+            {
+                "choices": [
+                    {
+                        "delta": {
+                            "tool_calls": [
+                                {
+                                    "index": None,
+                                    "id": "call_1",
+                                    "type": "function",
+                                    "extra_content": {"google": {"thought_signature": "sig-1"}},
+                                    "function": {
+                                        "name": "read_file",
+                                        "arguments": '{"path":',
+                                    },
+                                }
+                            ]
+                        }
+                    }
+                ]
+            },
+            {
+                "choices": [
+                    {
+                        "delta": {
+                            "tool_calls": [
+                                {
+                                    "index": None,
+                                    "function": {"arguments": '"README.md"}'},
+                                }
+                            ]
+                        },
+                        "finish_reason": "tool_calls",
+                    }
+                ]
+            },
+            {
+                "choices": [],
+                "usage": {"prompt_tokens": 2, "completion_tokens": 3, "total_tokens": 5},
+            },
+        ]
     )
+    fake = FakeClient([stream])
     client = ModelClient(
         model="gemini-3.7-flash",
         api_key="x",
         base_url="https://generativelanguage.googleapis.com/v1beta/openai/",
-        client=FakeClient([stream]),
+        client=fake,
         max_retries=0,
     )
+
     events = list(client.stream([{"role": "user", "content": "x"}], []))
+
     assert events[0].text == "Checking. "
     calls = next(event.tool_calls for event in events if event.type == "tool_calls")
     assert calls[0].name == "read_file"
-    assert calls[0].arguments == {"path": "a.py"}
+    assert calls[0].arguments == {"path": "README.md"}
     assert calls[0].thought_signature == "sig-1"
     assert next(event.usage for event in events if event.type == "usage").total_tokens == 5
-    request = client._client.chat.completions.requests[0]
-    assert request["extra_body"]["google"]["thinking_config"]["include_thoughts"] is True
+    request = fake.chat.completions.requests[0]
+    assert request["stream"] is True
+    assert request["stream_options"] == {"include_usage": True}
+    assert "extra_body" not in request
     assert stream.closed
+
+
+def test_stream_keeps_parallel_indexless_calls_separate_by_id() -> None:
+    stream = FakeStream(
+        [
+            {
+                "choices": [
+                    {
+                        "finish_reason": "tool_calls",
+                        "delta": {
+                            "tool_calls": [
+                                {
+                                    "index": None,
+                                    "id": "paris",
+                                    "extra_content": {
+                                        "google": {"thought_signature": "sig-parallel"}
+                                    },
+                                    "function": {
+                                        "name": "weather",
+                                        "arguments": '{"city":"Paris"}',
+                                    },
+                                },
+                                {
+                                    "index": None,
+                                    "id": "london",
+                                    "function": {
+                                        "name": "weather",
+                                        "arguments": '{"city":"London"}',
+                                    },
+                                },
+                            ]
+                        },
+                    }
+                ]
+            }
+        ]
+    )
+    client = ModelClient(model="gemini", api_key="x", client=FakeClient([stream]))
+
+    events = list(client.stream([], []))
+
+    calls = next(event.tool_calls for event in events if event.type == "tool_calls")
+    assert [call.id for call in calls] == ["paris", "london"]
+    assert [call.arguments["city"] for call in calls] == ["Paris", "London"]
+    assert calls[0].thought_signature == "sig-parallel"
+    assert calls[1].thought_signature is None
 
 
 def test_retry_before_output_and_invalid_json() -> None:
@@ -96,23 +159,25 @@ def test_retry_before_output_and_invalid_json() -> None:
     error.status_code = 429  # type: ignore[attr-defined]
     sleeps: list[float] = []
     stream = FakeStream(
-        events=[],
-        completion={
-            "choices": [
-                {
-                    "finish_reason": "tool_calls",
-                    "message": {
-                        "tool_calls": [
-                            {
-                                "id": "x",
-                                "type": "function",
-                                "function": {"name": "read_file", "arguments": "{"},
-                            }
-                        ]
-                    },
-                }
-            ]
-        },
+        [
+            {
+                "choices": [
+                    {
+                        "finish_reason": "tool_calls",
+                        "delta": {
+                            "tool_calls": [
+                                {
+                                    "index": 0,
+                                    "id": "x",
+                                    "type": "function",
+                                    "function": {"name": "read_file", "arguments": "{"},
+                                }
+                            ]
+                        },
+                    }
+                ]
+            }
+        ]
     )
     client = ModelClient(
         model="m",
@@ -121,10 +186,25 @@ def test_retry_before_output_and_invalid_json() -> None:
         max_retries=1,
         sleep=sleeps.append,
     )
+
     final = list(client.stream([], []))[-1]
+
     assert final.type == "error"
     assert "invalid JSON" in (final.error or "")
     assert sleeps
+    assert stream.closed
+
+
+def test_non_retryable_authentication_error_is_not_retried() -> None:
+    error = RuntimeError("invalid API key")
+    error.status_code = 401  # type: ignore[attr-defined]
+    fake = FakeClient([error])
+    client = ModelClient(model="m", api_key="x", client=fake, max_retries=3)
+
+    final = list(client.stream([], []))[-1]
+
+    assert final.type == "error"
+    assert len(fake.chat.completions.requests) == 1
 
 
 def test_stream_is_closed_when_iteration_is_cancelled() -> None:
@@ -133,13 +213,14 @@ def test_stream_is_closed_when_iteration_is_cancelled() -> None:
             raise KeyboardInterrupt
             yield {}
 
-    stream = InterruptingStream([], {"choices": []})
+    stream = InterruptingStream([])
     client = ModelClient(
         model="m",
         api_key="x",
         client=FakeClient([stream]),
         max_retries=0,
     )
+
     with pytest.raises(KeyboardInterrupt):
         list(client.stream([], []))
     assert stream.closed

@@ -26,8 +26,22 @@ class ContextManager:
         if len(messages) <= 9:
             return messages, ""
         system = [message for message in messages[:1] if message.get("role") == "system"]
-        recent = messages[-8:]
-        older = messages[len(system) : -8]
+        system_count = len(system)
+        latest_user = next(
+            (
+                index
+                for index in range(len(messages) - 1, system_count - 1, -1)
+                if messages[index].get("role") == "user"
+            ),
+            len(messages),
+        )
+        # Keep at least four recent message pairs, and never split the active
+        # user turn. Gemini validates every tool-call signature in that turn.
+        recent_start = min(max(system_count, len(messages) - 8), latest_user)
+        recent = messages[recent_start:]
+        older = messages[system_count:recent_start]
+        if not older:
+            return messages, ""
         first_goal = next(
             (
                 str(message.get("content", ""))

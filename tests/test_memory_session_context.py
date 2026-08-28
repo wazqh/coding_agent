@@ -37,6 +37,10 @@ def test_memory_isolation_and_disabled(tmp_path: Path) -> None:
     two = tmp_path / "two"
     one.mkdir()
     two.mkdir()
+    # Keep the isolation assertion valid even when the sandbox temp root itself
+    # lives inside this repository.
+    (one / ".git").mkdir()
+    (two / ".git").mkdir()
     first = MemoryStore(data_dir=data, workspace=one, enabled=True)
     second = MemoryStore(data_dir=data, workspace=two, enabled=True)
     first.remember(content="This project uses pytest", session_id="one")

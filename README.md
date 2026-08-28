@@ -26,6 +26,27 @@ coding-agent --cwd .
 arguments, project configuration, or saved memory. On Windows, `python -m coding_agent` works even
 when the user-level Python Scripts directory is not on `PATH`.
 
+### Gemini through the OpenAI-compatible endpoint
+
+Gemini keys can be used without installing a second SDK. Set all three variables in the same
+PowerShell session:
+
+```powershell
+$env:OPENAI_API_KEY = "YOUR_GEMINI_API_KEY"
+$env:OPENAI_BASE_URL = "https://generativelanguage.googleapis.com/v1beta/openai/"
+$env:CODING_AGENT_MODEL = "gemini-3.7-flash"
+
+python -m coding_agent run "Read README.md and summarize it in three sentences" `
+  --cwd . --output rich --permissions read-only --trust-project
+```
+
+The adapter consumes raw Chat Completions chunks because some compatible endpoints omit the tool
+call indexes required by the OpenAI SDK's high-level stream accumulator. Gemini tool-call thought
+signatures are preserved and returned in `extra_content.google.thought_signature` as required by
+the [Gemini OpenAI compatibility documentation](https://ai.google.dev/gemini-api/docs/openai) and
+[thought-signature guide](https://ai.google.dev/gemini-api/docs/generate-content/thought-signatures).
+The agent does not request or display thought summaries.
+
 ## Commands
 
 ```text

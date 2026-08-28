@@ -304,22 +304,21 @@ class AgentController:
                     )
                 assistant: dict[str, Any] = {"role": "assistant", "content": content or None}
                 if tool_calls:
-                    assistant["tool_calls"] = [
-                        {
+                    assistant["tool_calls"] = []
+                    for call in tool_calls:
+                        call_payload: dict[str, Any] = {
                             "id": call.id,
                             "type": "function",
                             "function": {
                                 "name": call.name,
                                 "arguments": json.dumps(call.arguments, ensure_ascii=False),
-                                **(
-                                    {"thought_signature": call.thought_signature}
-                                    if call.thought_signature
-                                    else {}
-                                ),
                             },
                         }
-                        for call in tool_calls
-                    ]
+                        if call.thought_signature:
+                            call_payload["extra_content"] = {
+                                "google": {"thought_signature": call.thought_signature}
+                            }
+                        assistant["tool_calls"].append(call_payload)
                 self._append_message(assistant)
                 if not tool_calls:
                     if content.strip():

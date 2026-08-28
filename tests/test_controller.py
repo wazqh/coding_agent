@@ -78,7 +78,7 @@ def test_agent_loop_tool_observation_then_completion(settings: Settings) -> None
         for message in second_request
         if message.get("role") == "assistant" and message.get("tool_calls")
     )
-    assert assistant["tool_calls"][0]["function"]["thought_signature"] == "sig-1"
+    assert assistant["tool_calls"][0]["extra_content"]["google"]["thought_signature"] == "sig-1"
     assert SessionStore(settings.data_dir).messages(result.session_id)
 
 

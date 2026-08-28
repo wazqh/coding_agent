@@ -49,3 +49,49 @@ def test_context_compaction_preserves_recent_and_summary() -> None:
     assert "Completed changes: read" in summary
     assert "Pending work: test" in summary
     assert estimate_tokens(compacted) > 0
+
+
+def test_context_compaction_never_splits_active_tool_turn() -> None:
+    signature_call = {
+        "role": "assistant",
+        "content": None,
+        "tool_calls": [
+            {
+                "id": "call-1",
+                "type": "function",
+                "function": {"name": "read_file", "arguments": "{}"},
+                "extra_content": {"google": {"thought_signature": "sig-1"}},
+            }
+        ],
+    }
+    messages: list[dict[str, object]] = [
+        {"role": "user", "content": "old request"},
+        {"role": "assistant", "content": "old answer"},
+        {"role": "user", "content": "active request"},
+        signature_call,
+    ]
+    for index in range(5):
+        messages.extend(
+            [
+                {"role": "tool", "tool_call_id": f"call-{index}", "content": "result"},
+                {
+                    "role": "assistant",
+                    "content": None,
+                    "tool_calls": [
+                        {
+                            "id": f"call-{index + 2}",
+                            "type": "function",
+                            "function": {"name": "read_file", "arguments": "{}"},
+                        }
+                    ],
+                },
+            ]
+        )
+
+    compacted, summary = ContextManager(context_window=20).compact(
+        messages, WorkingState(goal="active request")
+    )
+
+    assert summary
+    assert {"role": "user", "content": "active request"} in compacted
+    assert signature_call in compacted
