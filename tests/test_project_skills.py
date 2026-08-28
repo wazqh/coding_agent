@@ -61,9 +61,50 @@ def test_agents_hierarchy_and_boundary(tmp_path: Path) -> None:
     (tmp_path / "src" / "AGENTS.md").write_text("src rule", encoding="utf-8")
     content = load_agents_instructions(tmp_path, nested)
     assert content.index("root rule") < content.index("src rule")
+    assert "Scope: `entire workspace`" in content
+    assert "Scope: `src/**`" in content
+    root_scopes = load_agents_instructions(tmp_path)
+    assert "root rule" in root_scopes
+    assert "src rule" not in root_scopes
+    assert "`src/AGENTS.md` applies to `src/**`" in root_scopes
     with pytest.raises(ValueError):
         load_agents_instructions(tmp_path, tmp_path.parent)
     assert (tmp_path / "src" / "AGENTS.md") in project_resource_files(tmp_path)
+
+
+def test_agents_filename_is_case_insensitive(tmp_path: Path) -> None:
+    path = tmp_path / "AGENTS.MD"
+    path.write_text("uppercase extension rule", encoding="utf-8")
+
+    content = load_agents_instructions(tmp_path)
+
+    assert "uppercase extension rule" in content
+    assert path.resolve() in project_resource_files(tmp_path)
+
+
+def test_agents_discovery_ignores_temp_and_nested_repositories(tmp_path: Path) -> None:
+    root_agents = tmp_path / "AGENTS.md"
+    root_agents.write_text("root", encoding="utf-8")
+    temporary = tmp_path / ".test-tmp-run"
+    nested_repo = tmp_path / "vendor"
+    ignored = tmp_path / "scratch-generated"
+    temporary.mkdir()
+    nested_repo.mkdir()
+    ignored.mkdir()
+    (nested_repo / ".git").mkdir()
+    (tmp_path / ".gitignore").write_text("scratch-*/\n", encoding="utf-8")
+    (temporary / "AGENTS.md").write_text("temporary", encoding="utf-8")
+    (nested_repo / "AGENTS.md").write_text("nested repository", encoding="utf-8")
+    (ignored / "AGENTS.md").write_text("ignored output", encoding="utf-8")
+
+    content = load_agents_instructions(tmp_path)
+    resources = project_resource_files(tmp_path)
+
+    assert "root" in content
+    assert "temporary" not in content
+    assert "nested repository" not in content
+    assert "ignored output" not in content
+    assert resources == [root_agents]
 
 
 def test_skill_lazy_loading_conflict_and_resources(tmp_path: Path) -> None:

@@ -1,4 +1,4 @@
-"""Forge Coding Agent: a local-first coding-agent runtime."""
+"""Forge Coding Agent: a local-first coding agent runtime."""
 
 from coding_agent.events import AgentEvent, AgentState, ToolResult
 

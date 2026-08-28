@@ -4,10 +4,15 @@ from collections.abc import Callable
 from pathlib import Path
 
 from prompt_toolkit import PromptSession
+from prompt_toolkit.formatted_text import AnyFormattedText
 from prompt_toolkit.history import FileHistory
 from prompt_toolkit.key_binding import KeyBindings
+from prompt_toolkit.shortcuts import CompleteStyle
+from prompt_toolkit.styles import Style
 from rich.console import Console
+from rich.text import Text
 
+from coding_agent.branding import MODULE_NAME
 from coding_agent.context import estimate_tokens
 from coding_agent.controller import AgentController
 from coding_agent.memory import MemoryError
@@ -16,6 +21,24 @@ from coding_agent.ui.completion import SLASH_COMMANDS, AgentCompleter
 from coding_agent.ui.render import RichRenderer
 
 ControllerFactory = Callable[[str | None], AgentController]
+
+_PROMPT_STYLE = Style.from_dict(
+    {
+        "prompt": "bold #59b8ff",
+        "continuation": "#637083",
+        "bottom-toolbar": "#637083",
+        "bottom-toolbar.model": "bold #8ba7c9",
+        "bottom-toolbar.accent": "#59b8ff",
+        "placeholder": "#637083 italic",
+        "completion-menu": "bg:#172033 #d7deea",
+        "completion-menu.completion.current": "bg:#31558a #ffffff",
+    }
+)
+
+
+def _continuation(width: int, line_number: int, soft_wrap_width: int) -> AnyFormattedText:
+    del line_number, soft_wrap_width
+    return [("class:continuation", "· ".rjust(width))]
 
 
 def _bindings() -> KeyBindings:
@@ -62,7 +85,13 @@ class InteractiveShell:
             key_bindings=_bindings(),
             multiline=True,
             complete_while_typing=True,
+            complete_style=CompleteStyle.MULTI_COLUMN,
+            reserve_space_for_menu=6,
             enable_open_in_editor=True,
+            prompt_continuation=_continuation,
+            bottom_toolbar=self._bottom_toolbar,
+            placeholder=[("class:placeholder", "Describe a task or type /help")],
+            style=_PROMPT_STYLE,
         )
 
     def run(self) -> int:
@@ -71,11 +100,12 @@ class InteractiveShell:
             cwd=self.controller.settings.cwd.name,
             permissions=self.controller.approval.mode,
         )
-        self.console.print("[dim]输入任务，/help 查看命令；Ctrl+D 退出。[/]")
+        self.renderer.welcome()
         while True:
             try:
-                value = self.session.prompt("› ").strip()
+                value = self.session.prompt([("class:prompt", "› ")]).strip()
             except EOFError:
+                self._session_handoff()
                 return 0
             except KeyboardInterrupt:
                 self.console.print("[yellow]已取消输入；Ctrl+D 退出。[/]")
@@ -84,23 +114,62 @@ class InteractiveShell:
                 continue
             if value.startswith("/"):
                 if self._slash(value):
+                    self._session_handoff()
                     return 0
                 continue
-            result = self.controller.run_turn(value)
-            self._footer(result.tool_steps)
+            self.renderer.start_turn_status(self._runtime_status)
+            try:
+                self.controller.run_turn(value)
+            finally:
+                self.renderer.stop_turn_status()
 
-    def _footer(self, steps: int) -> None:
-        tokens = estimate_tokens(self.controller.conversation)
+    def _runtime_status(self) -> dict[str, object]:
         settings = self.controller.settings
         memory_enabled = bool(self.controller.memory and self.controller.memory.enabled)
+        completed = sum(item.get("status") == "completed" for item in self.controller.working.plan)
+        return {
+            "model": settings.model.name,
+            "max_steps": settings.agent.max_steps,
+            "plan_completed": completed,
+            "plan_total": len(self.controller.working.plan),
+            "context_tokens": estimate_tokens(self.controller.conversation),
+            "context_window": settings.agent.context_window,
+            "memory_enabled": memory_enabled,
+            "skills": ",".join(self.controller.working.active_skills),
+        }
+
+    def _session_handoff(self) -> None:
+        session_id = self.controller.session_id
+        workspace = self.controller.settings.cwd
         self.console.print(
-            "[dim]"
-            f"{settings.model.name} | {steps}/{settings.agent.max_steps} steps | "
-            f"context {tokens}/{settings.agent.context_window} | "
-            f"memory {'on' if memory_enabled else 'off'} | "
-            f"skills {','.join(self.controller.working.active_skills) or '-'}"
-            "[/]"
+            Text.assemble(
+                ("session saved: ", "dim"),
+                (session_id, "cyan"),
+                "\n",
+                ("resume: ", "dim"),
+                f'python -m {MODULE_NAME} resume {session_id} --cwd "{workspace}"',
+            )
         )
+
+    def _bottom_toolbar(self):  # type: ignore[no-untyped-def]
+        settings = self.controller.settings
+        tokens = estimate_tokens(self.controller.conversation)
+        memory_enabled = bool(self.controller.memory and self.controller.memory.enabled)
+        completed = sum(item.get("status") == "completed" for item in self.controller.working.plan)
+        total = len(self.controller.working.plan)
+        used = min(100, int(tokens * 100 / max(1, settings.agent.context_window)))
+        fragments = [
+            ("class:bottom-toolbar.model", f" {settings.model.name}"),
+            ("class:bottom-toolbar", f" · {100 - used}% context left"),
+            ("class:bottom-toolbar", f" · {settings.cwd.name}"),
+        ]
+        if total and self.console.width >= 80:
+            fragments.append(("class:bottom-toolbar.accent", f" · plan {completed}/{total}"))
+        if self.console.width >= 110:
+            fragments.append(("class:bottom-toolbar", f" · {self.controller.approval.mode}"))
+        if memory_enabled and self.console.width >= 130:
+            fragments.append(("class:bottom-toolbar", " · memory"))
+        return fragments
 
     def _slash(self, raw: str) -> bool:
         command, _, argument = raw.partition(" ")
@@ -117,6 +186,10 @@ class InteractiveShell:
                     ("model", self.controller.settings.model.name),
                     ("cwd", str(self.controller.settings.cwd)),
                     ("permissions", self.controller.approval.mode),
+                    (
+                        "project rules",
+                        "loaded" if self.controller.agents_instructions else "none",
+                    ),
                     ("memory", "on" if memory_enabled else "off"),
                 ]
             )

@@ -9,6 +9,7 @@ from pathlib import Path
 from typing import Any
 from uuid import uuid4
 
+from coding_agent.branding import PRODUCT_NAME
 from coding_agent.config import Settings
 from coding_agent.context import ContextManager, estimate_tokens
 from coding_agent.events import AgentEvent, AgentState, EventKind, ToolCall
@@ -137,8 +138,8 @@ class AgentController:
     ) -> str:
         sections = [
             (
-                "You are Forge, a local CLI coding agent. Complete the user's task using the "
-                "provided local tools."
+                f"You are {PRODUCT_NAME}, a local CLI coding agent. Complete the user's task "
+                "using the provided local tools."
             ),
             (
                 "Never claim a tool ran when it did not. Read files before editing; use returned "

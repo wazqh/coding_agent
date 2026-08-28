@@ -62,6 +62,10 @@ command operation, and Ctrl+D exits. Cancellation closes the model stream, termi
 process tree, and records a resumable cancelled turn. Completion is available for slash commands,
 `$skills`, and `@workspace/files`.
 
+The visible product name is **Forge Coding Agent**; `coding-agent` is the stable executable name.
+The scrolling TUI uses a branded header, Markdown-rendered streaming responses, plan and approval
+panels, and a prompt-toolkit status bar without entering the terminal's alternate screen.
+
 Supported commands are `/help`, `/status`, `/model`, `/permissions`, `/plan`, `/diff`, `/memory`,
 `/skills`, `/compact`, `/resume`, `/new`, `/clear`, `/raw`, and `/exit`.
 
@@ -90,6 +94,8 @@ user cancellation returns 130.
 - Child processes receive a secret-stripped environment, bounded output, a timeout, and process-tree
   termination.
 - Repository `AGENTS.md`, configuration, and skills require hash-invalidated project trust.
+- `AGENTS.md` matching is case-insensitive, nested repositories and transient/build directories are
+  excluded, and nested rules are indexed by scope instead of being injected outside that scope.
 
 See [`docs/architecture.md`](docs/architecture.md) and [`SECURITY.md`](SECURITY.md) for the detailed
 boundaries.

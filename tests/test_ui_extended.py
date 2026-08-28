@@ -78,6 +78,11 @@ def make_shell(
         renderer=renderer,
         history_file=tmp_path / "history",
     )
+    toolbar = "".join(fragment for _, fragment in shell._bottom_toolbar())
+    assert "fake-model" in toolbar
+    assert "context left" in toolbar
+    assert tmp_path.name in toolbar
+    assert "Forge Coding Agent" not in toolbar
     return shell, controller, output
 
 
@@ -144,8 +149,61 @@ def test_shell_run_handles_cancel_empty_command_and_task(
     text = output.getvalue()
     assert "已取消输入" in text
     assert "/status" in text
-    assert "steps" in text
+    assert "session saved" in text
+    assert f"python -m coding_agent resume {controller.session_id}" in text
     assert any(message.get("content") == "inspect" for message in controller.conversation)
+
+
+def test_shell_wraps_each_task_with_runtime_status(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    shell, _, _ = make_shell(tmp_path, monkeypatch)
+    calls: list[str] = []
+    original_start = shell.renderer.start_turn_status
+    original_stop = shell.renderer.stop_turn_status
+
+    def start(provider):  # type: ignore[no-untyped-def]
+        calls.append("start")
+        original_start(provider)
+
+    def stop() -> None:
+        calls.append("stop")
+        original_stop()
+
+    monkeypatch.setattr(shell.renderer, "start_turn_status", start)
+    monkeypatch.setattr(shell.renderer, "stop_turn_status", stop)
+    values: Iterator[str | BaseException] = iter(["inspect", EOFError()])
+
+    class SequenceSession:
+        completer = shell.session.completer
+
+        def prompt(self, _prompt: str) -> str:
+            value = next(values)
+            if isinstance(value, BaseException):
+                raise value
+            return value
+
+    shell.session = SequenceSession()  # type: ignore[assignment]
+    assert shell.run() == 0
+    assert calls == ["start", "stop"]
+
+
+def test_exit_command_prints_session_resume_hint(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    shell, controller, output = make_shell(tmp_path, monkeypatch)
+
+    class ExitSession:
+        completer = shell.session.completer
+
+        def prompt(self, _prompt: str) -> str:
+            return "/exit"
+
+    shell.session = ExitSession()  # type: ignore[assignment]
+    assert shell.run() == 0
+    rendered = output.getvalue()
+    assert f"session saved: {controller.session_id}" in rendered
+    assert f"python -m coding_agent resume {controller.session_id}" in rendered
 
 
 def test_slash_commands_cover_state_and_errors(

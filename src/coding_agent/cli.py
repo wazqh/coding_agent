@@ -13,6 +13,7 @@ from rich.prompt import Prompt
 from rich.table import Table
 
 from coding_agent import __version__
+from coding_agent.branding import COMMAND_NAME, PRODUCT_NAME
 from coding_agent.config import ConfigError, load_settings
 from coding_agent.controller import AgentController
 from coding_agent.memory import MemoryStore
@@ -26,8 +27,8 @@ from coding_agent.ui.prompt import ControllerFactory, InteractiveShell
 from coding_agent.ui.render import JsonlRenderer, RichRenderer
 
 app = typer.Typer(
-    name="coding-agent",
-    help="A safe, local-first CLI coding agent.",
+    name=COMMAND_NAME,
+    help=f"{PRODUCT_NAME} — a safe, local-first CLI coding agent.",
     no_args_is_help=False,
     invoke_without_command=True,
     add_completion=False,
@@ -58,7 +59,7 @@ def _resolve_trust(
     if not interactive:
         return False
     console.print(
-        "[yellow]This project contains AGENTS.md, coding-agent.toml, or repository skills.[/]"
+        f"[yellow]{PRODUCT_NAME} found AGENTS.md, coding-agent.toml, or repository skills.[/]"
     )
     choice = Prompt.ask(
         "Trust project resources?",
@@ -101,7 +102,12 @@ def _build_runtime(
 ) -> tuple[AgentController, RichRenderer | JsonlRenderer, ControllerFactory]:
     workspace = cwd.expanduser().resolve()
     data_dir = _data_dir()
-    console = Console(no_color=bool(os.environ.get("NO_COLOR")), soft_wrap=True)
+    console = Console(
+        no_color=bool(os.environ.get("NO_COLOR")),
+        # JSONL records must remain one physical line. Rich output should wrap
+        # at the terminal width instead of relying on terminal-side wrapping.
+        soft_wrap=output == "jsonl",
+    )
     trusted = _resolve_trust(
         workspace,
         data_dir,

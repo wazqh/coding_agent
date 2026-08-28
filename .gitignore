@@ -6,6 +6,10 @@ __pycache__/
 pytest-cache-files-*/
 .test-tmp*/
 .test-runs/
+.coding-agent-data/
+.tmp-data/
+agents-demo-*/
+test-runtime-tmp/
 .mypy_cache/
 .ruff_cache/
 .coverage
