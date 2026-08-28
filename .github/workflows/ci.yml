@@ -83,10 +83,11 @@ jobs:
       - name: Build wheel and source distribution
         run: |
           python -m pip install build
-          python evals/run_eval.py --dry-run
           python -m build
       - name: Install wheel
         run: python -m pip install --force-reinstall dist/*.whl
+      - name: Evaluation manifest smoke test
+        run: python evals/run_eval.py --dry-run
       - name: CLI smoke test
         run: |
           coding-agent --version
