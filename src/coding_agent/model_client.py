@@ -71,8 +71,8 @@ class ModelClient:
         request["stream_options"] = {"include_usage": True}
         extra_body = self._gemini_extra_body()
         if extra_body is not None:
-            request["extra_body"] = extra_body
-        return cast(Iterable[Any], self._client.chat.completions.stream(**request))
+            request["extra_body"] = {"extra_body": extra_body}
+        return self._client.chat.completions.stream(**request)
 
     @staticmethod
     def _thought_signature(obj: Any) -> str | None:
@@ -98,9 +98,9 @@ class ModelClient:
         for attempt in range(self.max_retries + 1):
             emitted = False
             try:
-                stream = self._create_stream(messages, tools)
+                stream_manager = self._create_stream(messages, tools)
                 finish_reason: str | None = None
-                with stream:
+                with stream_manager as stream:
                     for event in stream:
                         kind = _value(event, "type")
                         if kind == "content.delta":
