@@ -16,6 +16,7 @@ from coding_agent.tools.filesystem import (
     SearchTextTool,
     WriteFileTool,
 )
+from coding_agent.tools.plan import UpdatePlanTool
 
 
 class ToolRegistry:
@@ -62,6 +63,7 @@ class ToolRegistry:
 def default_registry() -> ToolRegistry:
     return ToolRegistry(
         [
+            UpdatePlanTool(),
             ListFilesTool(),
             ReadFileTool(),
             SearchTextTool(),
