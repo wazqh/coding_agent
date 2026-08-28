@@ -77,7 +77,9 @@ class EscapeMonitor:
         return True
 
     def _watch_windows(self) -> None:
-        import msvcrt
+        # Import dynamically so Linux type checking does not resolve the
+        # platform-gated typeshed stub as an empty module.
+        msvcrt: Any = import_module("msvcrt")
 
         while not self._stop.is_set():
             if not self.enabled() or not msvcrt.kbhit():
