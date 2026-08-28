@@ -55,7 +55,12 @@ def test_agent_loop_tool_observation_then_completion(settings: Settings) -> None
     model = FakeModel(
         [
             tool_response(
-                ToolCall(id="call1", name="list_files", arguments={"path": ".", "pattern": "*.py"})
+                ToolCall(
+                    id="call1",
+                    name="list_files",
+                    arguments={"path": ".", "pattern": "*.py"},
+                    thought_signature="sig-1",
+                )
             ),
             text_response("All files checked."),
         ]
@@ -68,6 +73,12 @@ def test_agent_loop_tool_observation_then_completion(settings: Settings) -> None
     assert any(event.kind is EventKind.TOOL_RESULT for event in events)
     second_request = model.requests[1][0]
     assert any(message.get("role") == "tool" for message in second_request)
+    assistant = next(
+        message
+        for message in second_request
+        if message.get("role") == "assistant" and message.get("tool_calls")
+    )
+    assert assistant["tool_calls"][0]["function"]["thought_signature"] == "sig-1"
     assert SessionStore(settings.data_dir).messages(result.session_id)
 
 

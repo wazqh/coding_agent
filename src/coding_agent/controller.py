@@ -311,6 +311,11 @@ class AgentController:
                             "function": {
                                 "name": call.name,
                                 "arguments": json.dumps(call.arguments, ensure_ascii=False),
+                                **(
+                                    {"thought_signature": call.thought_signature}
+                                    if call.thought_signature
+                                    else {}
+                                ),
                             },
                         }
                         for call in tool_calls

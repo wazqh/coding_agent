@@ -37,23 +37,50 @@ class ModelClient:
         if not api_key:
             raise ValueError("OPENAI_API_KEY is required")
         self.model = model
+        self.base_url = base_url
         self.max_retries = max_retries
         self._sleep = sleep
         self._client = client or OpenAI(api_key=api_key, base_url=base_url)
 
+    def _gemini_extra_body(self) -> dict[str, Any] | None:
+        if not self.base_url:
+            return None
+        if "generativelanguage.googleapis.com" not in self.base_url:
+            return None
+        if not self.model.startswith("gemini-"):
+            return None
+        return {
+            "google": {
+                "thinking_config": {
+                    "thinking_level": "low",
+                    "include_thoughts": True,
+                }
+            }
+        }
+
     def _create_stream(
         self, messages: Sequence[dict[str, Any]], tools: Sequence[dict[str, Any]]
-    ) -> Iterable[Any]:
+    ) -> Any:
         request: dict[str, Any] = {
             "model": self.model,
             "messages": list(messages),
-            "stream": True,
-            "stream_options": {"include_usage": True},
         }
         if tools:
             request["tools"] = list(tools)
             request["tool_choice"] = "auto"
-        return cast(Iterable[Any], self._client.chat.completions.create(**request))
+        request["stream_options"] = {"include_usage": True}
+        extra_body = self._gemini_extra_body()
+        if extra_body is not None:
+            request["extra_body"] = extra_body
+        return cast(Iterable[Any], self._client.chat.completions.stream(**request))
+
+    @staticmethod
+    def _thought_signature(obj: Any) -> str | None:
+        for key in ("thought_signature", "thoughtSignature"):
+            value = _value(obj, key)
+            if value:
+                return str(value)
+        return None
 
     @staticmethod
     def _retryable(exc: Exception) -> bool:
@@ -71,72 +98,59 @@ class ModelClient:
         for attempt in range(self.max_retries + 1):
             emitted = False
             try:
-                chunks = self._create_stream(messages, tools)
-                calls: dict[int, dict[str, str]] = {}
+                stream = self._create_stream(messages, tools)
                 finish_reason: str | None = None
-                usage: Usage | None = None
-                try:
-                    for chunk in chunks:
-                        raw_usage = _value(chunk, "usage")
-                        if raw_usage is not None:
-                            usage = Usage(
-                                prompt_tokens=int(_value(raw_usage, "prompt_tokens", 0) or 0),
-                                completion_tokens=int(
-                                    _value(raw_usage, "completion_tokens", 0) or 0
-                                ),
-                                total_tokens=int(_value(raw_usage, "total_tokens", 0) or 0),
-                            )
-                        choices = _value(chunk, "choices", []) or []
-                        if not choices:
-                            continue
-                        choice = choices[0]
-                        finish_reason = _value(choice, "finish_reason") or finish_reason
-                        delta = _value(choice, "delta", {}) or {}
-                        content = _value(delta, "content")
-                        if content:
-                            emitted = True
-                            yield ModelStreamEvent(type="text_delta", text=str(content))
-                        for fragment in _value(delta, "tool_calls", []) or []:
-                            index = int(_value(fragment, "index", 0) or 0)
-                            target = calls.setdefault(
-                                index, {"id": "", "name": "", "arguments": ""}
-                            )
-                            fragment_id = _value(fragment, "id")
-                            if fragment_id:
-                                target["id"] += str(fragment_id)
-                            function = _value(fragment, "function", {}) or {}
-                            name = _value(function, "name")
-                            arguments = _value(function, "arguments")
-                            if name:
-                                target["name"] += str(name)
-                            if arguments:
-                                target["arguments"] += str(arguments)
-                finally:
-                    close = getattr(chunks, "close", None)
-                    if callable(close):
-                        close()
+                with stream:
+                    for event in stream:
+                        kind = _value(event, "type")
+                        if kind == "content.delta":
+                            content = _value(event, "delta")
+                            if content:
+                                emitted = True
+                                yield ModelStreamEvent(type="text_delta", text=str(content))
+                    completion = stream.get_final_completion()
+                choices = _value(completion, "choices", []) or []
+                message = _value(choices[0], "message", {}) if choices else {}
+                if not emitted:
+                    content = _value(message, "content")
+                    if content:
+                        content_text = str(content)
+                        yield ModelStreamEvent(type="text_delta", text=content_text)
+                finish_reason = _value(choices[0], "finish_reason") if choices else None
                 assembled: list[ToolCall] = []
-                for index in sorted(calls):
-                    item = calls[index]
+                for index, raw_call in enumerate(_value(message, "tool_calls", []) or []):
+                    function = _value(raw_call, "function", {}) or {}
+                    arguments_text = str(_value(function, "arguments", "") or "")
                     try:
-                        arguments = json.loads(item["arguments"] or "{}")
+                        arguments = json.loads(arguments_text or "{}")
                     except json.JSONDecodeError as exc:
+                        name = str(_value(function, "name", "") or "tool")
                         raise ModelProtocolError(
-                            f"invalid JSON arguments for {item['name'] or 'tool'}: {exc.msg}"
+                            f"invalid JSON arguments for {name}: {exc.msg}"
                         ) from exc
                     if not isinstance(arguments, dict):
                         raise ModelProtocolError("tool arguments must decode to an object")
                     assembled.append(
                         ToolCall(
-                            id=item["id"] or f"call_{index}",
-                            name=item["name"],
+                            id=str(_value(raw_call, "id", "") or f"call_{index}"),
+                            name=str(_value(function, "name", "") or ""),
                             arguments=arguments,
+                            thought_signature=self._thought_signature(function)
+                            or self._thought_signature(raw_call),
                         )
                     )
                 if assembled:
                     yield ModelStreamEvent(type="tool_calls", tool_calls=assembled)
-                if usage is not None:
-                    yield ModelStreamEvent(type="usage", usage=usage)
+                raw_usage = _value(completion, "usage")
+                if raw_usage is not None:
+                    yield ModelStreamEvent(
+                        type="usage",
+                        usage=Usage(
+                            prompt_tokens=int(_value(raw_usage, "prompt_tokens", 0) or 0),
+                            completion_tokens=int(_value(raw_usage, "completion_tokens", 0) or 0),
+                            total_tokens=int(_value(raw_usage, "total_tokens", 0) or 0),
+                        ),
+                    )
                 yield ModelStreamEvent(type="done", finish_reason=finish_reason)
                 return
             except Exception as exc:

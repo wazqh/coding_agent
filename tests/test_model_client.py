@@ -8,12 +8,31 @@ import pytest
 from coding_agent.model_client import ModelClient
 
 
+class FakeStream:
+    def __init__(self, events: list[dict[str, Any]], completion: dict[str, Any]) -> None:
+        self.events = events
+        self.completion = completion
+        self.closed = False
+
+    def __enter__(self) -> FakeStream:
+        return self
+
+    def __exit__(self, exc_type, exc, exc_tb) -> None:
+        self.closed = True
+
+    def __iter__(self) -> Iterator[dict[str, Any]]:
+        return iter(self.events)
+
+    def get_final_completion(self) -> dict[str, Any]:
+        return self.completion
+
+
 class FakeCompletions:
     def __init__(self, streams: list[Any]) -> None:
         self.streams = streams
         self.requests: list[dict[str, Any]] = []
 
-    def create(self, **kwargs: Any):
+    def stream(self, **kwargs: Any) -> FakeStream:
         self.requests.append(kwargs)
         value = self.streams.pop(0)
         if isinstance(value, Exception):
@@ -27,100 +46,94 @@ class FakeClient:
         self.chat.completions = FakeCompletions(streams)
 
 
-def test_stream_assembles_fragmented_tool_call() -> None:
-    chunks = [
-        {
+def test_stream_assembles_tool_call_and_thought_signature() -> None:
+    stream = FakeStream(
+        events=[{"type": "content.delta", "delta": "Checking. "}],
+        completion={
             "choices": [
                 {
-                    "delta": {
-                        "content": "Checking. ",
+                    "finish_reason": "tool_calls",
+                    "message": {
+                        "content": None,
                         "tool_calls": [
                             {
-                                "index": 0,
                                 "id": "call_1",
-                                "function": {"name": "read_", "arguments": '{"pa'},
+                                "type": "function",
+                                "function": {
+                                    "name": "read_file",
+                                    "arguments": '{"path":"a.py"}',
+                                    "thought_signature": "sig-1",
+                                },
                             }
                         ],
-                    }
-                }
-            ]
-        },
-        {
-            "choices": [
-                {
-                    "delta": {
-                        "tool_calls": [
-                            {
-                                "index": 0,
-                                "function": {"name": "file", "arguments": 'th":"a.py"}'},
-                            }
-                        ]
                     },
-                    "finish_reason": "tool_calls",
                 }
             ],
             "usage": {"prompt_tokens": 2, "completion_tokens": 3, "total_tokens": 5},
         },
-    ]
-    client = ModelClient(model="m", api_key="x", client=FakeClient([chunks]), max_retries=0)
+    )
+    client = ModelClient(
+        model="gemini-3.7-flash",
+        api_key="x",
+        base_url="https://generativelanguage.googleapis.com/v1beta/openai/",
+        client=FakeClient([stream]),
+        max_retries=0,
+    )
     events = list(client.stream([{"role": "user", "content": "x"}], []))
     assert events[0].text == "Checking. "
     calls = next(event.tool_calls for event in events if event.type == "tool_calls")
     assert calls[0].name == "read_file"
     assert calls[0].arguments == {"path": "a.py"}
+    assert calls[0].thought_signature == "sig-1"
     assert next(event.usage for event in events if event.type == "usage").total_tokens == 5
+    request = client._client.chat.completions.requests[0]
+    assert request["extra_body"]["google"]["thinking_config"]["include_thoughts"] is True
+    assert stream.closed
 
 
 def test_retry_before_output_and_invalid_json() -> None:
     error = RuntimeError("rate limited")
     error.status_code = 429  # type: ignore[attr-defined]
     sleeps: list[float] = []
-    chunks = [{"choices": [{"delta": {"content": "ok"}, "finish_reason": "stop"}]}]
-    client = ModelClient(
-        model="m",
-        api_key="x",
-        client=FakeClient([error, chunks]),
-        max_retries=1,
-        sleep=sleeps.append,
-    )
-    assert any(event.text == "ok" for event in client.stream([], []))
-    assert sleeps
-
-    bad = [
-        {
+    stream = FakeStream(
+        events=[],
+        completion={
             "choices": [
                 {
-                    "delta": {
+                    "finish_reason": "tool_calls",
+                    "message": {
                         "tool_calls": [
                             {
-                                "index": 0,
                                 "id": "x",
+                                "type": "function",
                                 "function": {"name": "read_file", "arguments": "{"},
                             }
                         ]
-                    }
+                    },
                 }
             ]
-        }
-    ]
-    malformed = ModelClient(model="m", api_key="x", client=FakeClient([bad]), max_retries=0)
-    final = list(malformed.stream([], []))[-1]
+        },
+    )
+    client = ModelClient(
+        model="m",
+        api_key="x",
+        client=FakeClient([error, stream]),
+        max_retries=1,
+        sleep=sleeps.append,
+    )
+    final = list(client.stream([], []))[-1]
     assert final.type == "error"
     assert "invalid JSON" in (final.error or "")
+    assert sleeps
 
 
 def test_stream_is_closed_when_iteration_is_cancelled() -> None:
-    class InterruptingStream(Iterator[dict[str, Any]]):
-        def __init__(self) -> None:
-            self.closed = False
-
-        def __next__(self) -> dict[str, Any]:
+    class InterruptingStream(FakeStream):
+        def __iter__(self) -> Iterator[dict[str, Any]]:
             raise KeyboardInterrupt
+            yield {}
 
-        def close(self) -> None:
-            self.closed = True
-
-    stream = InterruptingStream()
+    stream = InterruptingStream([], {"choices": []})
     client = ModelClient(
         model="m",
         api_key="x",
