@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import builtins
-import importlib
 import json
 import re
 from datetime import UTC, datetime
@@ -13,6 +12,7 @@ from pydantic import BaseModel, Field
 
 from coding_agent.project import project_id
 from coding_agent.safety.paths import atomic_write_text
+from coding_agent.tokens import count_tokens
 
 
 class MemoryError(ValueError):
@@ -61,7 +61,11 @@ def _validate_content(content: str) -> str:
         raise MemoryError("memory content is empty")
     if len(value) > 1000:
         raise MemoryError("memory content exceeds 1000 characters")
-    if _ASSIGNMENT_SECRET.search(value) or _TOKEN_SECRET.search(value) or _PRIVATE_KEY.search(value):
+    if (
+        _ASSIGNMENT_SECRET.search(value)
+        or _TOKEN_SECRET.search(value)
+        or _PRIVATE_KEY.search(value)
+    ):
         raise MemoryError("memory content appears to contain a secret")
     if value.count("\n") > 20 or ("```" in value and len(value) > 400):
         raise MemoryError("large source-code blocks cannot be stored as memory")
@@ -69,12 +73,7 @@ def _validate_content(content: str) -> str:
 
 
 def _token_count(text: str) -> int:
-    try:
-        tiktoken = importlib.import_module("tiktoken")
-        encoded: builtins.list[int] = tiktoken.get_encoding("cl100k_base").encode(text)
-        return len(encoded)
-    except (ImportError, KeyError, AttributeError):
-        return max(1, len(text) // 4)
+    return count_tokens(text)
 
 
 class MemoryStore:
@@ -125,7 +124,10 @@ class MemoryStore:
         normalized = " ".join(content.casefold().split())
         now = datetime.now(UTC)
         for record in records:
-            if record.kind == candidate.kind and " ".join(record.content.casefold().split()) == normalized:
+            if (
+                record.kind == candidate.kind
+                and " ".join(record.content.casefold().split()) == normalized
+            ):
                 record.enabled = True
                 record.updated_at = now
                 record.confidence = max(record.confidence, candidate.confidence)
@@ -184,7 +186,9 @@ class MemoryStore:
                 continue
             words = {word.casefold() for word in _WORDS.findall(record.content)}
             overlap = len(query_words & words)
-            path_score = sum(1 for path in path_values if path and path in record.content.casefold())
+            path_score = sum(
+                1 for path in path_values if path and path in record.content.casefold()
+            )
             kind_score = 1.5 if record.kind in {MemoryKind.CONSTRAINT, MemoryKind.COMMAND} else 0.5
             recency = 0.0
             if record.last_used_at:

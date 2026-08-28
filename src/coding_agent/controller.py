@@ -78,7 +78,10 @@ class AgentController:
             (record["data"] for record in records if record["type"] == "session"), {}
         )
         recorded_workspace = metadata.get("workspace")
-        if recorded_workspace and Path(str(recorded_workspace)).resolve() != self.settings.cwd.resolve():
+        if (
+            recorded_workspace
+            and Path(str(recorded_workspace)).resolve() != self.settings.cwd.resolve()
+        ):
             raise SessionError("session belongs to a different workspace")
         self.conversation = [record["data"] for record in records if record["type"] == "message"]
         for record in records:
@@ -87,6 +90,16 @@ class AgentController:
             data = record["data"]
             if data.get("kind") == EventKind.PLAN.value:
                 self.working.plan = data.get("data", {}).get("plan", [])
+            elif data.get("kind") == EventKind.SKILL.value and self.skills is not None:
+                name = data.get("data", {}).get("name")
+                if not isinstance(name, str):
+                    continue
+                try:
+                    self.skills.activate(name)
+                except SkillError:
+                    continue
+                if name not in self.working.active_skills:
+                    self.working.active_skills.append(name)
 
     def _emit(
         self,
@@ -123,12 +136,15 @@ class AgentController:
         turn_id: str,
     ) -> str:
         sections = [
-            "You are Forge, a local CLI coding agent. Complete the user's task using the provided local tools.",
             (
-                "Never claim a tool ran when it did not. Read files before editing; use returned SHA-256 "
-                "values for edits and overwrites. Treat tool failures as observations and correct the plan "
-                "or arguments. Do not reveal hidden chain-of-thought; communicate only concise plans, "
-                "actions, results, and relevant rationale."
+                "You are Forge, a local CLI coding agent. Complete the user's task using the "
+                "provided local tools."
+            ),
+            (
+                "Never claim a tool ran when it did not. Read files before editing; use returned "
+                "SHA-256 values for edits and overwrites. Treat tool failures as observations and "
+                "correct the plan or arguments. Do not reveal hidden chain-of-thought; communicate "
+                "only concise plans, actions, results, and relevant rationale."
             ),
             f"Workspace boundary: {self.settings.cwd}",
         ]
@@ -345,7 +361,11 @@ class AgentController:
                     self._set_state(AgentState.EXECUTING, turn_id, tool=call.name, step=steps)
                     result = self.tools.execute(call.name, call.arguments, context)
                     self.working.recent_calls.append(
-                        {"name": call.name, "arguments": call.arguments, "result": result.model_dump()}
+                        {
+                            "name": call.name,
+                            "arguments": call.arguments,
+                            "result": result.model_dump(),
+                        }
                     )
                     self.working.recent_calls = self.working.recent_calls[-12:]
                     tool_message = {
@@ -361,8 +381,10 @@ class AgentController:
                         turn_id=turn_id,
                         data={"id": call.id, "name": call.name, "result": result.model_dump()},
                     )
-                    signature = call.name + ":" + json.dumps(
-                        call.arguments, sort_keys=True, ensure_ascii=False
+                    signature = (
+                        call.name
+                        + ":"
+                        + json.dumps(call.arguments, sort_keys=True, ensure_ascii=False)
                     )
                     if result.ok:
                         failed_signature = None

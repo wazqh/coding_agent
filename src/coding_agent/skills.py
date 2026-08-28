@@ -8,7 +8,6 @@ from typing import Any
 
 import yaml
 
-
 MAX_SKILL_BYTES = 64 * 1024
 VALID_NAME = re.compile(r"^[a-z0-9][a-z0-9_-]{0,63}$")
 
@@ -71,6 +70,7 @@ class SkillRegistry:
         self.skills: dict[str, SkillMetadata] = {}
         self.diagnostics: list[str] = []
         self.active: set[str] = set()
+        self.include_repo = False
 
     def _discover_root(self, root: Path, source: str) -> list[SkillMetadata]:
         found: list[SkillMetadata] = []
@@ -105,6 +105,7 @@ class SkillRegistry:
         return found
 
     def discover(self, *, include_repo: bool) -> list[SkillMetadata]:
+        self.include_repo = include_repo
         self.skills = {}
         self.diagnostics = []
         for meta in self._discover_root(self.user_root, "user"):

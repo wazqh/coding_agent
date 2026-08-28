@@ -1,20 +1,15 @@
 from __future__ import annotations
 
 import json
-import importlib
 from typing import Any
 
+from coding_agent.tokens import count_tokens
 from coding_agent.tools.base import WorkingState
 
 
 def estimate_tokens(messages: list[dict[str, Any]]) -> int:
     text = json.dumps(messages, ensure_ascii=False, default=str)
-    try:
-        tiktoken = importlib.import_module("tiktoken")
-        encoded: list[int] = tiktoken.get_encoding("cl100k_base").encode(text)
-        return len(encoded)
-    except (ImportError, KeyError, AttributeError):
-        return max(1, len(text) // 4)
+    return count_tokens(text)
 
 
 class ContextManager:
@@ -34,12 +29,14 @@ class ContextManager:
         recent = messages[-8:]
         older = messages[len(system) : -8]
         first_goal = next(
-            (str(message.get("content", "")) for message in messages if message.get("role") == "user"),
+            (
+                str(message.get("content", ""))
+                for message in messages
+                if message.get("role") == "user"
+            ),
             working.goal,
         )
-        completed = [
-            item["step"] for item in working.plan if item.get("status") == "completed"
-        ]
+        completed = [item["step"] for item in working.plan if item.get("status") == "completed"]
         pending = [item["step"] for item in working.plan if item.get("status") != "completed"]
         failures: list[str] = []
         evidence: list[str] = []
@@ -55,7 +52,8 @@ class ContextManager:
             [
                 "Conversation summary (original transcript remains in the session log):",
                 f"Goal: {first_goal[:1000]}",
-                "Constraints: obey workspace isolation, project instructions, approvals, and user intent.",
+                "Constraints: obey workspace isolation, project instructions, approvals, "
+                "and user intent.",
                 "Completed changes: " + ("; ".join(completed) or "none recorded"),
                 "Failed approaches: " + ("; ".join(failures[-4:]) or "none recorded"),
                 "Test evidence: " + ("; ".join(evidence[-4:]) or "none recorded"),
