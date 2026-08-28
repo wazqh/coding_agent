@@ -83,6 +83,9 @@ def test_project_trust_choices(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) 
 @pytest.mark.parametrize(
     ("choice", "expected"),
     [
+        ("1", ApprovalDecision.ALLOW_ONCE),
+        ("2", ApprovalDecision.ALLOW_SESSION),
+        ("3", ApprovalDecision.DENY),
         ("once", ApprovalDecision.ALLOW_ONCE),
         ("session", ApprovalDecision.ALLOW_SESSION),
         ("deny", ApprovalDecision.DENY),
@@ -99,6 +102,29 @@ def test_approval_prompt_mapping(
     assert callback(request) is expected
 
 
+def test_approval_prompt_pauses_live_status(monkeypatch: pytest.MonkeyPatch) -> None:
+    calls: list[str] = []
+
+    class Renderer:
+        def pause_turn_status(self) -> bool:
+            calls.append("pause")
+            return True
+
+        def resume_turn_status(self) -> None:
+            calls.append("resume")
+
+    output = StringIO()
+    monkeypatch.setattr(cli.Prompt, "ask", lambda *args, **kwargs: "1")
+    callback = cli._approval_callback(
+        Console(file=output, color_system=None),
+        Renderer(),  # type: ignore[arg-type]
+    )
+    request = ApprovalRequest(action="edit_file", subject="a.py", summary="edit a.py")
+    assert callback(request) is ApprovalDecision.ALLOW_ONCE
+    assert calls == ["pause", "resume"]
+    assert "Choose an approval" in output.getvalue()
+
+
 def test_build_runtime_variants(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setenv("CODING_AGENT_DATA_DIR", str(tmp_path / "data"))
     monkeypatch.setenv("OPENAI_API_KEY", "test-key")
@@ -112,7 +138,11 @@ def test_build_runtime_variants(tmp_path: Path, monkeypatch: pytest.MonkeyPatch)
     )
     assert controller.settings.model.name == "test-model"
     assert isinstance(renderer, JsonlRenderer)
-    assert factory(None).session_id != controller.session_id
+    replacement = factory(None)
+    assert replacement.session_id != controller.session_id
+    assert replacement.approval is not controller.approval
+    assert replacement.memory is not controller.memory
+    assert replacement.skills is not controller.skills
 
     _, rich, _ = cli._build_runtime(
         cwd=tmp_path,

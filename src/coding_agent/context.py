@@ -12,37 +12,65 @@ def estimate_tokens(messages: list[dict[str, Any]]) -> int:
     return count_tokens(text)
 
 
+def estimate_request_tokens(
+    messages: list[dict[str, Any]], tools: list[dict[str, Any]] | None = None
+) -> int:
+    """Estimate the complete request, including function declarations."""
+
+    total = estimate_tokens(messages)
+    if tools:
+        total += count_tokens(json.dumps(tools, ensure_ascii=False, default=str))
+    return total
+
+
 class ContextManager:
     def __init__(self, *, context_window: int, threshold: float = 0.7) -> None:
         self.context_window = context_window
         self.threshold = threshold
 
-    def should_compact(self, messages: list[dict[str, Any]]) -> bool:
-        return estimate_tokens(messages) >= int(self.context_window * self.threshold)
+    def should_compact(
+        self,
+        messages: list[dict[str, Any]],
+        tools: list[dict[str, Any]] | None = None,
+    ) -> bool:
+        return estimate_request_tokens(messages, tools) >= int(self.context_window * self.threshold)
 
     def compact(
         self, messages: list[dict[str, Any]], working: WorkingState
     ) -> tuple[list[dict[str, Any]], str]:
         if len(messages) <= 9:
             return messages, ""
-        system = [message for message in messages[:1] if message.get("role") == "system"]
-        system_count = len(system)
-        latest_user = next(
-            (
-                index
-                for index in range(len(messages) - 1, system_count - 1, -1)
-                if messages[index].get("role") == "user"
-            ),
-            len(messages),
-        )
-        # Keep at least four recent message pairs, and never split the active
-        # user turn. Gemini validates every tool-call signature in that turn.
-        recent_start = min(max(system_count, len(messages) - 8), latest_user)
+        system_count = 0
+        while system_count < len(messages) and messages[system_count].get("role") == "system":
+            system_count += 1
+        previous_summaries = [
+            str(message.get("content", "")) for message in messages[:system_count]
+        ]
+        user_indices = [
+            index
+            for index in range(system_count, len(messages))
+            if messages[index].get("role") == "user"
+        ]
+        if not user_indices:
+            return messages, ""
+        # A turn begins at a user message and includes every assistant/tool exchange
+        # up to the next user message. Keep four complete turns rather than eight
+        # arbitrary messages, which can split a Gemini function-call group.
+        recent_start = user_indices[-4] if len(user_indices) >= 4 else user_indices[0]
         recent = messages[recent_start:]
         older = messages[system_count:recent_start]
         if not older:
             return messages, ""
-        first_goal = next(
+        previous_goal = next(
+            (
+                line.removeprefix("Goal: ")
+                for summary in previous_summaries
+                for line in summary.splitlines()
+                if line.startswith("Goal: ")
+            ),
+            "",
+        )
+        first_goal = previous_goal or next(
             (
                 str(message.get("content", ""))
                 for message in messages
@@ -74,5 +102,5 @@ class ContextManager:
                 "Pending work: " + ("; ".join(pending) or "none recorded"),
             ]
         )
-        compacted = [*system, {"role": "system", "content": summary}, *recent]
+        compacted = [{"role": "system", "content": summary}, *recent]
         return compacted, summary

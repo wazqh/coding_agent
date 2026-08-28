@@ -7,23 +7,7 @@ from prompt_toolkit.completion import Completer, Completion
 from prompt_toolkit.document import Document
 
 from coding_agent.skills import SkillRegistry
-
-SLASH_COMMANDS = [
-    "/help",
-    "/status",
-    "/model",
-    "/permissions",
-    "/plan",
-    "/diff",
-    "/memory",
-    "/skills",
-    "/compact",
-    "/resume",
-    "/new",
-    "/clear",
-    "/raw",
-    "/exit",
-]
+from coding_agent.ui.commands import COMMAND_BY_NAME, SLASH_COMMANDS
 
 
 class AgentCompleter(Completer):
@@ -36,7 +20,11 @@ class AgentCompleter(Completer):
         if token.startswith("/") and not document.text_before_cursor.strip().count(" "):
             for command in SLASH_COMMANDS:
                 if command.startswith(token):
-                    yield Completion(command, start_position=-len(token))
+                    yield Completion(
+                        command,
+                        start_position=-len(token),
+                        display_meta=COMMAND_BY_NAME[command].description,
+                    )
             return
         if token.startswith("$"):
             prefix = token[1:]

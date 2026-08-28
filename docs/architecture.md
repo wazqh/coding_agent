@@ -37,8 +37,12 @@ terminates the complete command process tree before the cancelled turn is persis
 - `AGENTS.md` is repository-owned policy. Skills are reusable procedures. Neither is memory.
 
 At 70% of the context window, deterministic compaction preserves the goal, constraints, changes,
-failed approaches, test evidence, pending work, and four recent interaction groups. The transcript
-on disk is append-only and remains available for replay.
+failed approaches, test evidence, pending work, and four recent complete user turns. A compacted
+snapshot has one effective summary and never starts inside an assistant/tool function-call group.
+The threshold estimates the complete request, including tool schemas. Before transport, adjacent
+system or interrupted user records and legacy invalid snapshot boundaries are normalized in memory
+for strict compatible providers; the append-only transcript is not rewritten and remains available
+for replay.
 
 ## Trust and execution boundary
 

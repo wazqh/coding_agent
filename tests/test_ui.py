@@ -1,7 +1,10 @@
 from __future__ import annotations
 
 from io import BytesIO, StringIO, TextIOWrapper
+from itertools import pairwise
 from pathlib import Path
+from threading import Event
+from types import SimpleNamespace
 
 from prompt_toolkit.document import Document
 from rich.console import Console
@@ -14,8 +17,9 @@ from coding_agent.safety.approval import ApprovalPolicy
 from coding_agent.session import SessionStore
 from coding_agent.skills import SkillRegistry
 from coding_agent.tools.registry import default_registry
+from coding_agent.ui.cancel import EscapeMonitor
 from coding_agent.ui.completion import AgentCompleter
-from coding_agent.ui.prompt import InteractiveShell
+from coding_agent.ui.prompt import InteractiveShell, _PromptBackgroundProcessor
 from coding_agent.ui.render import JsonlRenderer, RichRenderer
 
 
@@ -77,7 +81,8 @@ def test_jsonl_renderer_and_completions(tmp_path: Path) -> None:
     slash = list(completer.get_completions(Document("/sta", 4), object()))
     skill = list(completer.get_completions(Document("$de", 3), object()))
     files = list(completer.get_completions(Document("@alp", 4), object()))
-    assert any(item.text == "/status" for item in slash)
+    status_completion = next(item for item in slash if item.text == "/status")
+    assert "会话" in str(status_completion.display_meta)
     assert any(item.text == "$demo" for item in skill)
     assert any(item.text == "@alpha.py" for item in files)
 
@@ -97,6 +102,69 @@ def test_streamed_assistant_text_is_rendered_as_markdown() -> None:
     value = output.getvalue()
     assert "Result" in value
     assert "**Result**" not in value
+
+
+def test_user_input_background_is_applied_before_submission() -> None:
+    transformation = _PromptBackgroundProcessor().apply_transformation(
+        SimpleNamespace(fragments=[("", "inspect the repository")])  # type: ignore[arg-type]
+    )
+
+    style, content = transformation.fragments[0]
+    assert content == "inspect the repository"
+    assert "bg:#202a38" in style
+
+
+def test_all_agent_output_uses_the_same_response_indent() -> None:
+    output = StringIO()
+    renderer = RichRenderer(console=Console(file=output, color_system=None, width=80))
+    renderer.handle(
+        AgentEvent(
+            kind=EventKind.TOOL_CALL,
+            session_id="s",
+            data={"name": "read_file", "arguments": {"path": "README.md"}},
+        )
+    )
+    renderer.handle(
+        AgentEvent(
+            kind=EventKind.TOOL_RESULT,
+            session_id="s",
+            data={"result": {"ok": True, "summary": "read README.md"}},
+        )
+    )
+    renderer.handle(
+        AgentEvent(
+            kind=EventKind.PLAN,
+            session_id="s",
+            data={"plan": [{"step": "Inspect files", "status": "in_progress"}]},
+        )
+    )
+    renderer.handle(
+        AgentEvent(
+            kind=EventKind.APPROVAL,
+            session_id="s",
+            data={"request": {"summary": "edit README.md", "action": "edit_file"}},
+        )
+    )
+    renderer.handle(AgentEvent(kind=EventKind.TEXT, session_id="s", data={"delta": "Result"}))
+    renderer.handle(
+        AgentEvent(
+            kind=EventKind.DONE,
+            session_id="s",
+            state=AgentState.COMPLETED,
+            data={"reason": "done"},
+        )
+    )
+
+    lines = output.getvalue().splitlines()
+    call_index = next(index for index, line in enumerate(lines) if "read_file" in line)
+    result_index = next(index for index, line in enumerate(lines) if "read README.md" in line)
+    assert lines[call_index].startswith("  ")
+    assert result_index == call_index + 1
+    for marker in ("Plan", "Approval required", "Result", "completed"):
+        index = next(index for index, line in enumerate(lines) if marker in line)
+        assert lines[index].startswith("  ")
+        assert lines[index - 1] == ""
+    assert not any(left == right == "" for left, right in pairwise(lines))
 
 
 def test_markdown_wrap_keeps_end_of_long_line() -> None:
@@ -207,7 +275,12 @@ def test_runtime_status_stays_live_during_tools_and_streaming() -> None:
         )
     )
     assert renderer._runtime_state is AgentState.AWAITING_APPROVAL
+    assert not renderer.accepts_escape_cancel
     assert provider_calls == 3
+    assert renderer.pause_turn_status()
+    assert renderer._turn_live is None
+    renderer.resume_turn_status()
+    assert renderer._turn_live is not None
     renderer.stop_turn_status()
 
     assert renderer._turn_live is None
@@ -217,6 +290,22 @@ def test_runtime_status_stays_live_during_tools_and_streaming() -> None:
     assert "context left" in rendered
     assert "Forge Coding Agent" not in rendered
     assert "Done" in rendered
+
+
+def test_diff_rendering_and_escape_monitor() -> None:
+    diff = "--- a/demo.py\n+++ b/demo.py\n@@ -1 +1 @@\n-old\n+new\n context\n"
+    rendered = RichRenderer.diff_text(diff)
+    assert rendered.plain == diff
+    styles = {str(span.style) for span in rendered.spans}
+    assert any("#173522" in style for style in styles)
+    assert any("#3a1c22" in style for style in styles)
+
+    event = Event()
+    monitor = EscapeMonitor(event, enabled=lambda: False)
+    assert not monitor.feed("\x1b") and not event.is_set()
+    monitor = EscapeMonitor(event)
+    assert not monitor.feed("x") and not event.is_set()
+    assert monitor.feed("\x1b") and event.is_set()
 
 
 def test_plan_updates_only_render_changed_steps() -> None:
@@ -306,6 +395,6 @@ def test_slash_commands_update_local_session_state(tmp_path: Path, monkeypatch) 
     shell._slash("/memory on")
     shell._slash("/memory remember Run pytest before commit")
     assert memory.enabled and memory.list()[0].content == "Run pytest before commit"
-    shell._slash("/raw")
+    shell._slash("/raw on")
     assert renderer.raw
     assert shell._slash("/exit")

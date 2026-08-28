@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import os
 import sys
+import time
 from pathlib import Path
 
 import pytest
@@ -128,6 +129,12 @@ def test_session_approval_grant(tmp_path: Path) -> None:
         {"path": "a.txt", "content": "2", "expected_sha256": digest},
         ctx,
     ).ok
+    assert policy.session_grant_count == 1
+    assert policy.set_mode("read-only")
+    assert policy.session_grant_count == 0
+    assert not policy.set_mode("read-only")
+    with pytest.raises(ValueError, match="unknown permission mode"):
+        policy.set_mode("unsafe")
 
 
 def test_file_change_while_approval_pending_is_rejected(tmp_path: Path) -> None:
@@ -186,6 +193,23 @@ def test_command_timeout_output_bound_and_tool_rejection(tmp_path: Path) -> None
     timeout_command = f"{quote}{sys.executable}{quote} -c {quote}import time; time.sleep(5){quote}"
     timed_out = run_subprocess(timeout_command, cwd=tmp_path, timeout=1)
     assert timed_out["timed_out"]
+
+    checks = 0
+
+    def cancel_command() -> bool:
+        nonlocal checks
+        checks += 1
+        return checks >= 3
+
+    started = time.monotonic()
+    cancelled = run_subprocess(
+        timeout_command,
+        cwd=tmp_path,
+        timeout=10,
+        cancel_requested=cancel_command,
+    )
+    assert cancelled["cancelled"] and not cancelled["timed_out"]
+    assert time.monotonic() - started < 5
 
     denied = default_registry().execute(
         "run_command",

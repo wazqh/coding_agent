@@ -19,6 +19,8 @@
   log or persist API keys, tokens, passwords, or secret environment values.
 - Gemini tool-call thought signatures must remain attached to
   `extra_content.google.thought_signature` and must survive session history and compaction.
+- Compact only at complete user-turn boundaries, keep one effective summary, and include tool
+  schemas when estimating the model request size.
 
 ## Development workflow
 

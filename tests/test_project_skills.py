@@ -160,3 +160,7 @@ def test_user_skill_disable_and_repo_opt_out(tmp_path: Path) -> None:
     registry.set_enabled("user-only", False)
     with pytest.raises(SkillError, match="unavailable"):
         registry.activate("user-only")
+    registry.discover(include_repo=False)
+    assert not registry.skills["user-only"].enabled
+    registry.set_enabled("user-only", True)
+    assert registry.skills["user-only"].enabled

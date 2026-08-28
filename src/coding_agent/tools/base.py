@@ -38,6 +38,7 @@ class ToolContext:
         event_sink: EventSink | None = None,
         command_timeout: int = 120,
         skills: SkillRegistry | None = None,
+        cancel_requested: Callable[[], bool] | None = None,
     ) -> None:
         self.workspace = workspace
         self.approval = approval
@@ -47,6 +48,7 @@ class ToolContext:
         self.event_sink = event_sink
         self.command_timeout = command_timeout
         self.skills = skills
+        self.cancel_requested = cancel_requested or (lambda: False)
 
     def emit(
         self,
@@ -67,6 +69,8 @@ class ToolContext:
             )
 
     def approve(self, request: ApprovalRequest) -> bool:
+        if self.cancel_requested():
+            return False
         self.emit(
             EventKind.APPROVAL,
             {"request": request.model_dump(mode="json")},
@@ -76,8 +80,9 @@ class ToolContext:
         self.emit(
             EventKind.APPROVAL,
             {"decision": decision.value, "subject": request.subject},
+            state=AgentState.EXECUTING,
         )
-        return decision is not ApprovalDecision.DENY
+        return decision is not ApprovalDecision.DENY and not self.cancel_requested()
 
 
 class EmptyArgs(BaseModel):

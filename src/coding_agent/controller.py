@@ -6,12 +6,13 @@ import time
 from collections.abc import Callable
 from dataclasses import dataclass
 from pathlib import Path
+from threading import Event
 from typing import Any
 from uuid import uuid4
 
 from coding_agent.branding import PRODUCT_NAME
 from coding_agent.config import Settings
-from coding_agent.context import ContextManager, estimate_tokens
+from coding_agent.context import ContextManager, estimate_request_tokens
 from coding_agent.events import AgentEvent, AgentState, EventKind, ToolCall
 from coding_agent.memory import MemoryStore
 from coding_agent.model_client import ModelClient
@@ -70,8 +71,12 @@ class AgentController:
         self.working = WorkingState()
         self.context = ContextManager(context_window=settings.agent.context_window)
         self.conversation: list[dict[str, Any]] = []
+        self._last_system_prompt = ""
         if session_id is not None:
             self._restore(session_id)
+        self.last_context_tokens = estimate_request_tokens(
+            self._messages_for_model(self.conversation), self.tools.schemas()
+        )
 
     def _restore(self, session_id: str) -> None:
         records = self.sessions.replay(session_id)
@@ -84,8 +89,18 @@ class AgentController:
             and Path(str(recorded_workspace)).resolve() != self.settings.cwd.resolve()
         ):
             raise SessionError("session belongs to a different workspace")
-        self.conversation = [record["data"] for record in records if record["type"] == "message"]
+        self.conversation = []
         for record in records:
+            if record["type"] == "message" and isinstance(record["data"], dict):
+                self.conversation.append(record["data"])
+                continue
+            if record["type"] == "compact":
+                snapshot = record["data"].get("conversation")
+                if isinstance(snapshot, list) and all(
+                    isinstance(message, dict) for message in snapshot
+                ):
+                    self.conversation = [dict(message) for message in snapshot]
+                continue
             if record["type"] != "event":
                 continue
             data = record["data"]
@@ -95,12 +110,36 @@ class AgentController:
                 name = data.get("data", {}).get("name")
                 if not isinstance(name, str):
                     continue
+                action = data.get("data", {}).get("action", "activated")
+                if action in {"enabled", "disabled"}:
+                    try:
+                        self.skills.set_enabled(name, action == "enabled")
+                    except SkillError:
+                        continue
+                    if action == "disabled" and name in self.working.active_skills:
+                        self.working.active_skills.remove(name)
+                    continue
                 try:
                     self.skills.activate(name)
                 except SkillError:
                     continue
                 if name not in self.working.active_skills:
                     self.working.active_skills.append(name)
+
+    def set_skill_enabled(self, name: str, enabled: bool) -> None:
+        """Update and persist a session-scoped skill availability choice."""
+
+        if self.skills is None:
+            raise SkillError("skills are unavailable")
+        self.skills.set_enabled(name, enabled)
+        if not enabled and name in self.working.active_skills:
+            self.working.active_skills.remove(name)
+        event = AgentEvent(
+            kind=EventKind.SKILL,
+            session_id=self.session_id,
+            data={"name": name, "action": "enabled" if enabled else "disabled"},
+        )
+        self.sessions.append(self.session_id, "event", event.model_dump(mode="json"))
 
     def _emit(
         self,
@@ -191,7 +230,7 @@ class AgentController:
     def _explicit_skills(user_input: str) -> list[str]:
         return list(dict.fromkeys(re.findall(r"(?<!\w)\$([a-z0-9][a-z0-9_-]{0,63})", user_input)))
 
-    def _tool_context(self, turn_id: str) -> ToolContext:
+    def _tool_context(self, turn_id: str, cancel_event: Event | None = None) -> ToolContext:
         def tool_sink(event: AgentEvent) -> None:
             self.sessions.append(self.session_id, "event", event.model_dump(mode="json"))
             if self.event_sink:
@@ -206,6 +245,7 @@ class AgentController:
             event_sink=tool_sink,
             command_timeout=self.settings.agent.command_timeout,
             skills=self.skills,
+            cancel_requested=cancel_event.is_set if cancel_event is not None else None,
         )
 
     def manual_compact(self) -> str:
@@ -215,11 +255,99 @@ class AgentController:
             self.sessions.append(
                 self.session_id,
                 "compact",
-                {"summary": summary, "manual": True},
+                {
+                    "summary": summary,
+                    "manual": True,
+                    "conversation": self.conversation,
+                },
+            )
+            request_messages = self._messages_for_model(
+                [
+                    *(
+                        [{"role": "system", "content": self._last_system_prompt}]
+                        if self._last_system_prompt
+                        else []
+                    ),
+                    *self.conversation,
+                ]
+            )
+            self.last_context_tokens = estimate_request_tokens(
+                request_messages, self.tools.schemas()
             )
         return summary
 
-    def run_turn(self, user_input: str) -> RunResult:
+    def _append_unexecuted_tools(
+        self,
+        calls: list[ToolCall],
+        start: int,
+        *,
+        code: str,
+        summary: str,
+    ) -> None:
+        for skipped in calls[start:]:
+            self._append_message(
+                {
+                    "role": "tool",
+                    "tool_call_id": skipped.id,
+                    "name": skipped.name,
+                    "content": json.dumps(
+                        {
+                            "ok": False,
+                            "code": code,
+                            "summary": summary,
+                            "data": {},
+                            "retryable": False,
+                            "truncated": False,
+                        }
+                    ),
+                }
+            )
+
+    @staticmethod
+    def _messages_for_model(messages: list[dict[str, Any]]) -> list[dict[str, Any]]:
+        """Coalesce adjacent user turns for strict OpenAI-compatible providers.
+
+        Cancelled turns can leave adjacent user records, old compact snapshots can begin
+        inside a tool chain, and a compact summary sits beside the current system prompt.
+        Repair those request-only boundaries without rewriting durable session history.
+        """
+
+        prepared: list[dict[str, Any]] = []
+        for message in messages:
+            current = dict(message)
+            role = current.get("role")
+            if role in {"system", "user"} and prepared and prepared[-1].get("role") == role:
+                previous = prepared[-1]
+                previous_content = previous.get("content")
+                current_content = current.get("content")
+                if isinstance(previous_content, list) and isinstance(current_content, list):
+                    previous["content"] = [*previous_content, *current_content]
+                else:
+                    parts = [
+                        str(content)
+                        for content in (previous_content, current_content)
+                        if content is not None and content != ""
+                    ]
+                    previous["content"] = "\n\n".join(parts)
+                continue
+            prepared.append(current)
+
+        system_count = 0
+        while system_count < len(prepared) and prepared[system_count].get("role") == "system":
+            system_count += 1
+        first_user = next(
+            (
+                index
+                for index in range(system_count, len(prepared))
+                if prepared[index].get("role") == "user"
+            ),
+            len(prepared),
+        )
+        if first_user > system_count:
+            prepared = [*prepared[:system_count], *prepared[first_user:]]
+        return prepared
+
+    def run_turn(self, user_input: str, *, cancel_event: Event | None = None) -> RunResult:
         turn_id = uuid4().hex[:16]
         started = self.monotonic()
         self.working.goal = user_input
@@ -239,6 +367,7 @@ class AgentController:
             explicit_skills=explicit_skills,
             turn_id=turn_id,
         )
+        self._last_system_prompt = system_prompt
         steps = 0
         last_text = ""
         failed_signature: str | None = None
@@ -246,6 +375,10 @@ class AgentController:
 
         try:
             while steps < self.settings.agent.max_steps:
+                if cancel_event is not None and cancel_event.is_set():
+                    return self._finish(
+                        AgentState.CANCELLED, turn_id, last_text, steps, "cancelled by Esc", 130
+                    )
                 if self.monotonic() - started >= self.settings.agent.max_seconds:
                     return self._finish(
                         AgentState.FAILED,
@@ -254,34 +387,57 @@ class AgentController:
                         steps,
                         "turn time budget exhausted",
                     )
-                request_messages = [
-                    {"role": "system", "content": system_prompt},
-                    *self.conversation,
-                ]
-                if self.context.should_compact(request_messages):
-                    before = estimate_tokens(request_messages)
+                tool_schemas = self.tools.schemas()
+                request_messages = self._messages_for_model(
+                    [
+                        {"role": "system", "content": system_prompt},
+                        *self.conversation,
+                    ]
+                )
+                self.last_context_tokens = estimate_request_tokens(request_messages, tool_schemas)
+                if self.context.should_compact(request_messages, tool_schemas):
+                    before = self.last_context_tokens
                     compacted, summary = self.context.compact(self.conversation, self.working)
                     if summary:
                         self.conversation = compacted
                         self.sessions.append(
                             self.session_id,
                             "compact",
-                            {"summary": summary, "manual": False, "tokens_before": before},
+                            {
+                                "summary": summary,
+                                "manual": False,
+                                "tokens_before": before,
+                                "conversation": self.conversation,
+                            },
                         )
                         self._emit(
                             EventKind.COMPACT,
                             turn_id=turn_id,
                             data={"tokens_before": before, "summary": summary},
                         )
-                        request_messages = [
-                            {"role": "system", "content": system_prompt},
-                            *self.conversation,
-                        ]
+                        request_messages = self._messages_for_model(
+                            [
+                                {"role": "system", "content": system_prompt},
+                                *self.conversation,
+                            ]
+                        )
+                        self.last_context_tokens = estimate_request_tokens(
+                            request_messages, tool_schemas
+                        )
                 self._set_state(AgentState.THINKING, turn_id, step=steps)
                 content_parts: list[str] = []
                 tool_calls: list[ToolCall] = []
                 model_error: str | None = None
-                for event in self.model.stream(request_messages, self.tools.schemas()):
+                for event in self.model.stream(request_messages, tool_schemas):
+                    if cancel_event is not None and cancel_event.is_set():
+                        return self._finish(
+                            AgentState.CANCELLED,
+                            turn_id,
+                            last_text,
+                            steps,
+                            "cancelled by Esc",
+                            130,
+                        )
                     if event.type == "text_delta" and event.text:
                         content_parts.append(event.text)
                         self._emit(EventKind.TEXT, turn_id=turn_id, data={"delta": event.text})
@@ -295,6 +451,15 @@ class AgentController:
                         )
                     elif event.type == "error":
                         model_error = event.error or "unknown model error"
+                if cancel_event is not None and cancel_event.is_set():
+                    return self._finish(
+                        AgentState.CANCELLED,
+                        turn_id,
+                        last_text,
+                        steps,
+                        "cancelled by Esc",
+                        130,
+                    )
                 content = "".join(content_parts)
                 if content:
                     last_text = content
@@ -334,27 +499,30 @@ class AgentController:
                         "model returned neither text nor tool calls",
                     )
 
-                context = self._tool_context(turn_id)
+                context = self._tool_context(turn_id, cancel_event)
                 for index, call in enumerate(tool_calls):
+                    if cancel_event is not None and cancel_event.is_set():
+                        self._append_unexecuted_tools(
+                            tool_calls,
+                            index,
+                            code="CANCELLED",
+                            summary="tool call cancelled before execution",
+                        )
+                        return self._finish(
+                            AgentState.CANCELLED,
+                            turn_id,
+                            last_text,
+                            steps,
+                            "cancelled by Esc",
+                            130,
+                        )
                     if steps >= self.settings.agent.max_steps:
-                        for skipped in tool_calls[index:]:
-                            self._append_message(
-                                {
-                                    "role": "tool",
-                                    "tool_call_id": skipped.id,
-                                    "name": skipped.name,
-                                    "content": json.dumps(
-                                        {
-                                            "ok": False,
-                                            "code": "STEP_BUDGET_EXHAUSTED",
-                                            "summary": "tool call was not executed",
-                                            "data": {},
-                                            "retryable": False,
-                                            "truncated": False,
-                                        }
-                                    ),
-                                }
-                            )
+                        self._append_unexecuted_tools(
+                            tool_calls,
+                            index,
+                            code="STEP_BUDGET_EXHAUSTED",
+                            summary="tool call was not executed",
+                        )
                         break
                     steps += 1
                     self._set_state(AgentState.TOOL_PENDING, turn_id, tool=call.name, step=steps)
@@ -386,6 +554,21 @@ class AgentController:
                         turn_id=turn_id,
                         data={"id": call.id, "name": call.name, "result": result.model_dump()},
                     )
+                    if cancel_event is not None and cancel_event.is_set():
+                        self._append_unexecuted_tools(
+                            tool_calls,
+                            index + 1,
+                            code="CANCELLED",
+                            summary="tool call cancelled before execution",
+                        )
+                        return self._finish(
+                            AgentState.CANCELLED,
+                            turn_id,
+                            last_text,
+                            steps,
+                            "cancelled by Esc",
+                            130,
+                        )
                     signature = (
                         call.name
                         + ":"

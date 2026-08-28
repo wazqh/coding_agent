@@ -80,12 +80,22 @@ class SessionStore:
                 ),
                 "",
             )
+            metadata = next(
+                (
+                    item["data"]
+                    for item in records
+                    if item["type"] == "session" and isinstance(item["data"], dict)
+                ),
+                {},
+            )
             sessions.append(
                 {
                     "id": path.stem,
                     "updated_at": records[-1]["timestamp"] if records else "",
                     "title": first_user[:80],
                     "records": len(records),
+                    "workspace": str(metadata.get("workspace", "")),
+                    "model": str(metadata.get("model", "")),
                 }
             )
         return sorted(sessions, key=lambda item: str(item["updated_at"]), reverse=True)

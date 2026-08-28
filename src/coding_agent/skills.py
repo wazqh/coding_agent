@@ -70,6 +70,7 @@ class SkillRegistry:
         self.skills: dict[str, SkillMetadata] = {}
         self.diagnostics: list[str] = []
         self.active: set[str] = set()
+        self._disabled: set[str] = set()
         self.include_repo = False
 
     def _discover_root(self, root: Path, source: str) -> list[SkillMetadata]:
@@ -117,7 +118,11 @@ class SkillRegistry:
                 if previous:
                     meta.conflicts.append(f"shadowed {previous.source} skill at {previous.root}")
                 self.skills[meta.name] = meta
+        for name in self._disabled:
+            if name in self.skills:
+                self.skills[name].enabled = False
         self.active.intersection_update(self.skills)
+        self.active.difference_update(self._disabled)
         return list(self.skills.values())
 
     def catalog(self) -> list[dict[str, Any]]:
@@ -161,5 +166,8 @@ class SkillRegistry:
         if name not in self.skills:
             raise SkillError(f"unknown skill: {name}")
         self.skills[name].enabled = enabled
-        if not enabled:
+        if enabled:
+            self._disabled.discard(name)
+        else:
+            self._disabled.add(name)
             self.active.discard(name)

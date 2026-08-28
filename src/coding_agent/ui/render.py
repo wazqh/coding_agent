@@ -6,11 +6,12 @@ from collections.abc import Callable
 from typing import Any
 
 from rich.console import Console, Group, RenderableType
+from rich.json import JSON
 from rich.live import Live
 from rich.markdown import Markdown
+from rich.padding import Padding
 from rich.panel import Panel
 from rich.spinner import Spinner
-from rich.syntax import Syntax
 from rich.table import Table
 from rich.text import Text
 
@@ -48,9 +49,35 @@ class RichRenderer:
         self._runtime_tool = ""
         self._spinner: Spinner | None = None
         self._last_plan: list[dict[str, Any]] = []
+        self._section_gap = False
 
     def _width(self) -> int:
         return max(32, min(self.console.width, 100))
+
+    def _response_width(self) -> int:
+        return max(30, self._width() - 2)
+
+    @staticmethod
+    def _indented(renderable: RenderableType) -> Padding:
+        return Padding(renderable, (0, 0, 0, 2))
+
+    def output(self, renderable: RenderableType, *, soft_wrap: bool = False) -> None:
+        """Print non-user conversation output on the shared response inset."""
+
+        self.console.print(self._indented(renderable), soft_wrap=soft_wrap)
+        self._section_gap = False
+
+    def section_break(self, *, force: bool = False) -> None:
+        """Leave one blank line before the next semantic conversation block."""
+
+        if self._section_gap and not force:
+            return
+        self.console.print()
+        self._section_gap = True
+
+    @property
+    def accepts_escape_cancel(self) -> bool:
+        return self._runtime_state is not AgentState.AWAITING_APPROVAL
 
     def _symbol(self, value: str, fallback: str) -> str:
         try:
@@ -84,7 +111,7 @@ class RichRenderer:
             Text.assemble(
                 (self._symbol("›", ">") + " ", "bold cyan"),
                 ("输入任务", "bold"),
-                ("  /help 查看命令 · Ctrl+J 换行 · Ctrl+D 退出", "dim"),
+                ("  /help 查看命令 · Ctrl+J 换行 · Esc 取消运行 · Ctrl+D 退出", "dim"),
             )
         )
 
@@ -100,15 +127,33 @@ class RichRenderer:
         self._runtime_step = 0
         self._runtime_tool = ""
         self._last_plan = []
-        if self.console.is_terminal:
-            self._spinner = Spinner("line", text=self._runtime_status_text(), style="cyan")
-            self._turn_live = Live(
-                self._turn_renderable(),
-                console=self.console,
-                refresh_per_second=12,
-                transient=True,
-            )
-            self._turn_live.start(refresh=True)
+        self.resume_turn_status()
+
+    def pause_turn_status(self) -> bool:
+        """Temporarily remove the live footer so an interactive prompt stays visible."""
+
+        self._end_stream()
+        if self._turn_live is None:
+            return False
+        self._turn_live.stop()
+        self._turn_live = None
+        return True
+
+    def resume_turn_status(self) -> None:
+        if (
+            self._runtime_status_provider is None
+            or self._turn_live is not None
+            or not self.console.is_terminal
+        ):
+            return
+        self._spinner = Spinner("line", text=self._runtime_status_text(), style="cyan")
+        self._turn_live = Live(
+            self._turn_renderable(),
+            console=self.console,
+            refresh_per_second=12,
+            transient=True,
+        )
+        self._turn_live.start(refresh=True)
 
     def stop_turn_status(self) -> None:
         self._end_stream()
@@ -165,8 +210,14 @@ class RichRenderer:
         else:
             status = Text.assemble(("* ", "cyan"), self._runtime_status_text())
         if self._stream_buffer:
-            return Group(Markdown("".join(self._stream_buffer)), status)
-        return status
+            return self._indented(Group(Markdown("".join(self._stream_buffer)), status))
+        return self._indented(status)
+
+    @staticmethod
+    def _assistant_markdown(content: str) -> Padding:
+        """Separate assistant prose from the tool timeline with a stable left inset."""
+
+        return Padding(Markdown(content), (0, 0, 0, 2))
 
     def _refresh_turn_status(self, *, refresh_metrics: bool = True) -> None:
         if refresh_metrics and self._runtime_status_provider is not None:
@@ -182,23 +233,28 @@ class RichRenderer:
         if self._turn_live is not None:
             self._refresh_turn_status(refresh_metrics=False)
             if content.strip():
-                self.console.print(Markdown(content))
+                self.console.print(self._assistant_markdown(content))
             return
         if self._live is not None:
-            self._live.update(Markdown(content), refresh=True)
+            self._live.update(self._assistant_markdown(content), refresh=True)
             self._live.stop()
             self._live = None
             return
         if content.strip():
-            self.console.print(Markdown(content))
+            self.console.print(self._assistant_markdown(content))
 
     def handle(self, event: AgentEvent) -> None:
         if event.kind is EventKind.TEXT:
-            self._stream_buffer.append(str(event.data.get("delta", "")))
+            delta = str(event.data.get("delta", ""))
+            if delta and not self._stream_buffer:
+                self.section_break()
+            if delta:
+                self._section_gap = False
+            self._stream_buffer.append(delta)
             if self._turn_live is not None:
                 self._refresh_turn_status(refresh_metrics=False)
             elif self.console.is_terminal:
-                rendered = Markdown("".join(self._stream_buffer))
+                rendered = self._assistant_markdown("".join(self._stream_buffer))
                 if self._live is None:
                     self._live = Live(
                         rendered,
@@ -222,10 +278,11 @@ class RichRenderer:
         elif event.kind is EventKind.PLAN:
             self.render_plan_update(event.data.get("plan", []))
         elif event.kind is EventKind.TOOL_CALL:
+            self.section_break()
             name = str(event.data.get("name", "tool"))
             arguments = event.data.get("arguments", {})
             subject = self._subject(arguments)
-            self.console.print(
+            self.output(
                 Text.assemble(
                     (self._symbol("•", "*") + " ", "cyan"),
                     (name, "bold #d7deea"),
@@ -233,13 +290,13 @@ class RichRenderer:
                 )
             )
             if self.raw:
-                self.console.print_json(json.dumps(arguments, ensure_ascii=False))
+                self.output(JSON(json.dumps(arguments, ensure_ascii=False, default=str)))
         elif event.kind is EventKind.TOOL_RESULT:
             result = event.data.get("result", {})
             ok = bool(result.get("ok"))
             icon = self._symbol("✓", "+") if ok else self._symbol("✗", "x")
             style = "green" if ok else "red"
-            self.console.print(
+            self.output(
                 Text.assemble(
                     (f"{icon} ", style),
                     (
@@ -249,38 +306,60 @@ class RichRenderer:
                 )
             )
             if self.raw and result.get("data"):
-                self.console.print_json(json.dumps(result["data"], ensure_ascii=False, default=str))
+                self.output(JSON(json.dumps(result["data"], ensure_ascii=False, default=str)))
+            self.section_break()
         elif event.kind is EventKind.APPROVAL and "request" in event.data:
+            self.section_break()
             request = event.data["request"]
             diff = request.get("diff")
+            action = str(request.get("action", "operation"))
+            subject = str(request.get("subject", ""))
+            content: list[RenderableType] = [
+                Text(str(request.get("summary", "approval required")), style="bold"),
+            ]
             if diff:
-                self.console.print(Syntax(diff, "diff", theme="ansi_dark", word_wrap=True))
-            self.console.print(
+                content.extend([Text(""), self.diff_text(str(diff))])
+            self.output(
                 Panel(
-                    Text(str(request.get("summary", "approval required"))),
-                    title="等待批准",
+                    Group(*content),
+                    title="Approval required",
+                    subtitle="1 allow once · 2 allow session · 3 deny",
                     border_style="yellow",
-                    width=self._width(),
+                    width=self._response_width(),
+                )
+            )
+            self.output(
+                Text.assemble(
+                    ("action  ", "dim"),
+                    (action, "yellow"),
+                    ("   target  ", "dim"),
+                    subject,
                 )
             )
         elif event.kind is EventKind.ERROR:
-            self.console.print(
+            self.section_break()
+            self.output(
                 Panel(
                     str(event.data.get("message", "error")),
                     title="错误",
                     border_style="red",
-                    width=self._width(),
+                    width=self._response_width(),
                 )
             )
         elif event.kind is EventKind.WARNING:
-            self.console.print(f"[yellow]warning:[/] {event.data.get('message', '')}")
+            self.section_break()
+            self.output(f"[yellow]warning:[/] {event.data.get('message', '')}")
         elif event.kind is EventKind.COMPACT:
-            self.console.print(
+            self.section_break()
+            self.output(
                 f"[dim]context compacted from {event.data.get('tokens_before', '?')} tokens[/]"
             )
         elif event.kind is EventKind.SKILL:
-            self.console.print(f"[magenta]skill:[/] {event.data.get('name')} activated")
+            self.section_break()
+            self.output(f"[magenta]skill:[/] {event.data.get('name')} activated")
+            self.section_break()
         elif event.kind is EventKind.DONE:
+            self.section_break()
             state = event.state or AgentState.FAILED
             icon, style = {
                 AgentState.COMPLETED: ("✓", "green"),
@@ -290,12 +369,13 @@ class RichRenderer:
             reason = str(event.data.get("reason", ""))
             if state is AgentState.COMPLETED and reason == "assistant completed":
                 reason = ""
-            self.console.print(
+            self.output(
                 Text.assemble(
                     (f"{icon} {state.value}", f"bold {style}"),
                     (f"  {reason}" if reason else "", "dim"),
                 )
             )
+            self.section_break()
         self._refresh_turn_status()
 
     @staticmethod
@@ -323,8 +403,7 @@ class RichRenderer:
             }.get(status, ("?", "yellow"))
             icon = self._symbol(icon, {"completed": "+", "in_progress": "*"}.get(status, "o"))
             table.add_row(Text(icon, style=style), Text(str(item.get("step", ""))))
-        self.console.print(Text("Plan", style="bold"))
-        self.console.print(table)
+        self.output(Group(Text("Plan", style="bold"), table))
 
     def render_plan_update(self, plan: list[dict[str, Any]]) -> None:
         previous = self._last_plan
@@ -332,8 +411,11 @@ class RichRenderer:
         if not previous or [item.get("step") for item in previous] != [
             item.get("step") for item in plan
         ]:
+            self.section_break()
             self.render_plan(plan)
+            self.section_break()
             return
+        separated = False
         for old, new in zip(previous, plan, strict=True):
             if old.get("status") == new.get("status"):
                 continue
@@ -343,13 +425,40 @@ class RichRenderer:
                 "in_progress": (self._symbol("•", "*"), "cyan"),
                 "pending": (self._symbol("○", "o"), "dim"),
             }.get(status, ("?", "yellow"))
-            self.console.print(Text.assemble((f"{icon} ", style), str(new.get("step", ""))))
+            if not separated:
+                self.section_break()
+                separated = True
+            self.output(Text.assemble((f"{icon} ", style), str(new.get("step", ""))))
+        if separated:
+            self.section_break()
+
+    @staticmethod
+    def diff_text(diff: str) -> Text:
+        rendered = Text()
+        for line in diff.splitlines(keepends=True):
+            if line.startswith("+++") or line.startswith("---"):
+                style = "bold #d7deea on #28303d"
+            elif line.startswith("+"):
+                style = "#9ee6b0 on #173522"
+            elif line.startswith("-"):
+                style = "#ffb3b3 on #3a1c22"
+            elif line.startswith("@@"):
+                style = "bold #d9b8ff on #30243d"
+            else:
+                style = "#c5ccd8"
+            rendered.append(line, style=style)
+        if diff and not diff.endswith("\n"):
+            rendered.append("\n")
+        return rendered
+
+    def render_diff(self, diff: str) -> None:
+        self.output(self.diff_text(diff), soft_wrap=False)
 
     def markdown(self, content: str) -> None:
-        self.console.print(Markdown(content))
+        self.output(Markdown(content))
 
     def status_table(self, rows: list[tuple[str, str]]) -> None:
         table = Table(show_header=False, box=None)
         for key, value in rows:
             table.add_row(Text(key, style="dim"), value)
-        self.console.print(table)
+        self.output(table)

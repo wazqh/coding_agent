@@ -42,9 +42,17 @@ class RunCommandTool(Tool):
         ):
             return ToolResult(ok=False, code="APPROVAL_DENIED", summary="command was denied")
         timeout = values.timeout or context.command_timeout
-        result = run_subprocess(values.command, cwd=context.workspace.root, timeout=timeout)
-        ok = result["exit_code"] == 0 and not result["timed_out"]
-        if result["timed_out"]:
+        result = run_subprocess(
+            values.command,
+            cwd=context.workspace.root,
+            timeout=timeout,
+            cancel_requested=context.cancel_requested,
+        )
+        ok = result["exit_code"] == 0 and not result["timed_out"] and not result["cancelled"]
+        if result["cancelled"]:
+            code = "CANCELLED"
+            summary = "command cancelled by user"
+        elif result["timed_out"]:
             code = "TIMEOUT"
             summary = f"command timed out after {timeout}s"
         else:

@@ -4,6 +4,8 @@ import os
 import re
 import subprocess  # nosec B404
 import tempfile
+import time
+from collections.abc import Callable
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
@@ -100,8 +102,18 @@ def run_subprocess(
     cwd: Path,
     timeout: int,
     environ: dict[str, str] | None = None,
+    cancel_requested: Callable[[], bool] | None = None,
 ) -> dict[str, Any]:
     timeout = min(max(timeout, 1), 300)
+    if cancel_requested is not None and cancel_requested():
+        return {
+            "exit_code": 130,
+            "stdout": "",
+            "stderr": "",
+            "timed_out": False,
+            "cancelled": True,
+            "truncated": False,
+        }
     creationflags: int
     if os.name == "nt":
         argv: str | list[str] = command
@@ -129,12 +141,26 @@ def run_subprocess(
             start_new_session=start_new_session,
         )
         timed_out = False
+        cancelled = False
+        deadline = time.monotonic() + timeout
         try:
-            exit_code = process.wait(timeout=timeout)
-        except subprocess.TimeoutExpired:
-            timed_out = True
-            _terminate_tree(process)
-            exit_code = process.wait(timeout=3)
+            while True:
+                if cancel_requested is not None and cancel_requested():
+                    cancelled = True
+                    _terminate_tree(process)
+                    exit_code = process.wait(timeout=3)
+                    break
+                remaining = deadline - time.monotonic()
+                if remaining <= 0:
+                    timed_out = True
+                    _terminate_tree(process)
+                    exit_code = process.wait(timeout=3)
+                    break
+                try:
+                    exit_code = process.wait(timeout=min(0.1, remaining))
+                    break
+                except subprocess.TimeoutExpired:
+                    continue
         except BaseException:
             # Ctrl+C and interpreter shutdown must not leave the command or its children running.
             try:
@@ -150,5 +176,6 @@ def run_subprocess(
         "stdout": out_text,
         "stderr": err_text,
         "timed_out": timed_out,
+        "cancelled": cancelled,
         "truncated": out_truncated or err_truncated,
     }

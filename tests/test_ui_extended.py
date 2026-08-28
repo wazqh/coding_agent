@@ -19,7 +19,7 @@ from coding_agent.safety.approval import ApprovalPolicy
 from coding_agent.session import SessionError, SessionStore
 from coding_agent.skills import SkillRegistry
 from coding_agent.tools.registry import default_registry
-from coding_agent.ui.prompt import InteractiveShell, _bindings
+from coding_agent.ui.prompt import InteractiveShell, _bindings, _PromptBackgroundProcessor
 from coding_agent.ui.render import RichRenderer
 
 
@@ -36,6 +36,8 @@ class TextModel:
 class FakePromptSession:
     def __init__(self, **kwargs: Any) -> None:
         self.completer = kwargs.get("completer")
+        self.erase_when_done = kwargs.get("erase_when_done")
+        self.input_processors = kwargs.get("input_processors", [])
 
 
 def make_shell(
@@ -77,6 +79,11 @@ def make_shell(
         controller_factory=factory,
         renderer=renderer,
         history_file=tmp_path / "history",
+    )
+    assert shell.session.erase_when_done is not True  # type: ignore[attr-defined]
+    assert any(
+        isinstance(processor, _PromptBackgroundProcessor)
+        for processor in shell.session.input_processors  # type: ignore[attr-defined]
     )
     toolbar = "".join(fragment for _, fragment in shell._bottom_toolbar())
     assert "fake-model" in toolbar
@@ -206,13 +213,87 @@ def test_exit_command_prints_session_resume_hint(
     assert f"python -m coding_agent resume {controller.session_id}" in rendered
 
 
+def test_resume_picker_lists_only_current_workspace_sessions(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    shell, controller, output = make_shell(tmp_path, monkeypatch)
+    selected: list[str | None] = []
+    previous_factory = shell.controller_factory
+
+    candidate = controller.sessions.create(
+        {"workspace": str(tmp_path.resolve()), "model": "older-model"}
+    )
+    controller.sessions.append_message(
+        candidate, {"role": "user", "content": "repair the date parser"}
+    )
+    controller.sessions.append_message(
+        candidate, {"role": "assistant", "content": "The parser fix is ready for verification."}
+    )
+    controller.sessions.append_message(
+        candidate,
+        {"role": "tool", "content": "raw tool output should not be replayed"},
+    )
+    foreign_root = tmp_path / "another-project"
+    foreign = controller.sessions.create(
+        {"workspace": str(foreign_root.resolve()), "model": "foreign-model"}
+    )
+    controller.sessions.append_message(
+        foreign, {"role": "user", "content": "do not show this session"}
+    )
+
+    def factory(session_id: str | None) -> AgentController:
+        selected.append(session_id)
+        if session_id == candidate:
+            return AgentController(
+                settings=controller.settings,
+                model=controller.model,
+                tools=controller.tools,
+                sessions=controller.sessions,
+                approval=ApprovalPolicy("prompt"),
+                memory=controller.memory,
+                skills=controller.skills,
+                session_id=session_id,
+            )
+        return previous_factory(session_id)
+
+    shell.controller_factory = factory
+    monkeypatch.setattr(prompt_module.Prompt, "ask", lambda *args, **kwargs: "1")
+    assert not shell._slash("/resume")
+    assert selected == [candidate]
+    rendered = output.getvalue()
+    assert "Recent sessions" in rendered
+    assert "repair the date parser" in rendered
+    assert candidate[:12] in rendered
+    assert "older-model" in rendered
+    assert "do not show this session" not in rendered
+    assert "Recent context" in rendered
+    assert "repair the date parser" in rendered
+    assert "The parser fix is ready" in rendered
+    assert "raw tool output should not be replayed" not in rendered
+
+
+def test_resume_picker_cancel_and_timestamp_fallback(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    shell, controller, output = make_shell(tmp_path, monkeypatch)
+    candidate = controller.sessions.create({"workspace": str(tmp_path.resolve())})
+    controller.sessions.append_message(candidate, {"role": "user", "content": "older task"})
+    monkeypatch.setattr(prompt_module.Prompt, "ask", lambda *args, **kwargs: "q")
+    assert not shell._slash("/resume")
+    assert "resume cancelled" in output.getvalue()
+    assert InteractiveShell._session_time("not-a-date") == "not-a-date"
+
+
 def test_slash_commands_cover_state_and_errors(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     shell, controller, output = make_shell(tmp_path, monkeypatch)
     controller.working.plan = [{"step": "test", "status": "pending"}]
     assert not shell._slash("/help")
+    assert not shell._slash("/help memory")
+    assert not shell._slash("/help missing")
     assert not shell._slash("/status")
+    assert not shell._slash("/status extra")
     assert not shell._slash("/model changed-model")
     assert controller.model.model == "changed-model"
     assert not shell._slash("/model")
@@ -223,13 +304,24 @@ def test_slash_commands_cover_state_and_errors(
     controller.working.diffs.append("--- a\n+++ b")
     assert not shell._slash("/diff")
     assert not shell._slash("/compact")
+    assert not shell._slash("/raw")
+    assert not shell._slash("/raw on")
+    assert shell.renderer.raw
+    assert not shell._slash("/raw invalid")
     assert not shell._slash("/clear")
     assert not shell._slash("/new")
     assert not shell._slash("/resume")
     assert not shell._slash("/resume bad")
     assert not shell._slash("/resume anything")
     assert not shell._slash("/unknown")
-    assert "unknown command" in output.getvalue()
+    text = output.getvalue()
+    assert "Slash commands" in text
+    assert "管理当前项目的长期记忆" in text
+    assert "unknown command" in text
+    assert "estimated request tokens" in text
+    assert "/model MODEL_ID" in text
+    assert "/permissions prompt|auto|read-only" in text
+    assert "/raw on|off" in text
 
 
 def test_memory_and_skill_slash_commands(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
@@ -246,24 +338,47 @@ def test_memory_and_skill_slash_commands(tmp_path: Path, monkeypatch: pytest.Mon
     shell._slash("/memory remember")
     shell._slash("/memory unknown")
     shell._slash("/memory clear")
+    shell._slash("/memory remember Keep this until confirmed")
+    assert memory.list()
+    shell._slash("/memory clear confirm")
+    assert memory.list() == []
     controller.memory = None
     shell._slash("/memory list")
 
+    assert controller.skills is not None
+    controller.skills.skills["demo"].description = (
+        "A concise demo workflow. USE FOR: " + "very long trigger metadata " * 30
+    )
     shell._slash("/skills")
     shell._slash("/skills search demo")
     shell._slash("/skills disable demo")
-    shell._slash("/skills enable demo")
-    shell._slash("/skills enable missing")
     shell._slash("/skills reload")
     assert controller.skills is not None
+    assert not controller.skills.skills["demo"].enabled
+    shell._slash("/skills enable $demo")
+    shell._slash("/skills enable missing")
+    shell._slash("/skills search")
+    shell._slash("/skills unknown")
     controller.skills.diagnostics.append("bad skill")
     shell._slash("/skills")
     controller.skills = None
     shell._slash("/skills")
     text = output.getvalue()
     assert "remembered" in text
-    assert "memory content is empty" in text
+    assert "clear would remove" in text
+    assert "usage: /memory" in text
+    assert "session disable choices preserved" in text
     assert "bad skill" in text
+    assert "A concise demo workflow." in text
+    assert "USE FOR:" not in text
+    assert "/skills enable|disable NAME" in text
+    assert "/memory on|off" in text
+
+
+def test_skill_summary_removes_model_trigger_metadata() -> None:
+    description = "Short user-facing summary. USE FOR: " + "trigger " * 100
+    assert InteractiveShell._skill_summary(description) == "Short user-facing summary."
+    assert InteractiveShell._skill_summary("word " * 100).endswith("…")
 
 
 def test_rich_renderer_all_event_variants() -> None:

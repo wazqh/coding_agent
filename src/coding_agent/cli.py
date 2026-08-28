@@ -28,7 +28,7 @@ from coding_agent.ui.render import JsonlRenderer, RichRenderer
 
 app = typer.Typer(
     name=COMMAND_NAME,
-    help=f"{PRODUCT_NAME} — a safe, local-first CLI coding agent.",
+    help=f"{PRODUCT_NAME}: a safe, local-first CLI coding agent.",
     no_args_is_help=False,
     invoke_without_command=True,
     add_completion=False,
@@ -73,15 +73,32 @@ def _resolve_trust(
     return choice == "once"
 
 
-def _approval_callback(console: Console) -> Callable[[ApprovalRequest], ApprovalDecision]:
+def _approval_callback(
+    console: Console,
+    renderer: RichRenderer | None = None,
+) -> Callable[[ApprovalRequest], ApprovalDecision]:
     def decide(request: ApprovalRequest) -> ApprovalDecision:
-        choice = Prompt.ask(
-            f"Allow {request.action} for {request.subject}?",
-            choices=["once", "session", "deny"],
-            default="deny",
-            console=console,
-        )
+        paused = renderer.pause_turn_status() if renderer is not None else False
+        try:
+            console.print()
+            console.print("  [bold]Choose an approval:[/]")
+            console.print("    [cyan]1[/]  Allow this operation once")
+            console.print("    [cyan]2[/]  Allow matching operations for this session")
+            console.print("    [red]3[/]  Deny and return the result to the agent")
+            choice = Prompt.ask(
+                "  Selection",
+                choices=["1", "2", "3"],
+                default="3",
+                console=console,
+            )
+            console.print()
+        finally:
+            if paused and renderer is not None:
+                renderer.resume_turn_status()
         return {
+            "1": ApprovalDecision.ALLOW_ONCE,
+            "2": ApprovalDecision.ALLOW_SESSION,
+            "3": ApprovalDecision.DENY,
             "once": ApprovalDecision.ALLOW_ONCE,
             "session": ApprovalDecision.ALLOW_SESSION,
             "deny": ApprovalDecision.DENY,
@@ -133,11 +150,6 @@ def _build_runtime(
         renderer = JsonlRenderer(console)
     else:
         renderer = RichRenderer(console=console, raw=settings.ui.raw_tool_output)
-    approval = ApprovalPolicy(
-        permissions,
-        interactive=interactive,
-        callback=_approval_callback(console) if interactive else None,
-    )
     model = ModelClient(
         model=settings.model.name,
         api_key=settings.model.api_key,
@@ -145,16 +157,27 @@ def _build_runtime(
         max_retries=settings.model.max_retries,
     )
     sessions = SessionStore(settings.data_dir)
-    memory = MemoryStore(
-        data_dir=settings.data_dir,
-        workspace=settings.cwd,
-        enabled=settings.memory.enabled,
-    )
-    skills = SkillRegistry(workspace=settings.cwd)
-    skills.discover(include_repo=trusted)
     instructions = load_agents_instructions(settings.cwd) if trusted else ""
 
     def factory(resume_id: str | None) -> AgentController:
+        approval = ApprovalPolicy(
+            permissions,
+            interactive=interactive,
+            callback=(
+                _approval_callback(
+                    console, renderer if isinstance(renderer, RichRenderer) else None
+                )
+                if interactive
+                else None
+            ),
+        )
+        memory = MemoryStore(
+            data_dir=settings.data_dir,
+            workspace=settings.cwd,
+            enabled=settings.memory.enabled,
+        )
+        skills = SkillRegistry(workspace=settings.cwd)
+        skills.discover(include_repo=trusted)
         return AgentController(
             settings=settings,
             model=model,

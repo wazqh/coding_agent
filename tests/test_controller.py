@@ -1,12 +1,14 @@
 from __future__ import annotations
 
 from collections.abc import Callable, Iterator
+from threading import Event
 from typing import Any
 
 import pytest
 from conftest import FakeModel
 
 from coding_agent.config import Settings
+from coding_agent.context import estimate_request_tokens
 from coding_agent.controller import AgentController
 from coding_agent.events import AgentState, EventKind, ModelStreamEvent, ToolCall
 from coding_agent.safety.approval import ApprovalPolicy
@@ -79,6 +81,7 @@ def test_agent_loop_tool_observation_then_completion(settings: Settings) -> None
         if message.get("role") == "assistant" and message.get("tool_calls")
     )
     assert assistant["tool_calls"][0]["extra_content"]["google"]["thought_signature"] == "sig-1"
+    assert controller.last_context_tokens == estimate_request_tokens(*model.requests[-1])
     assert SessionStore(settings.data_dir).messages(result.session_id)
 
 
@@ -163,7 +166,17 @@ def test_manual_compaction_keeps_transcript(settings: Settings) -> None:
     original_records = len(SessionStore(settings.data_dir).replay(controller.session_id))
     summary = controller.manual_compact()
     assert summary
-    assert len(SessionStore(settings.data_dir).replay(controller.session_id)) > original_records
+    records = SessionStore(settings.data_dir).replay(controller.session_id)
+    assert len(records) > original_records
+    compact_record = next(record for record in reversed(records) if record["type"] == "compact")
+    assert compact_record["data"]["conversation"] == controller.conversation
+
+    resumed = make_controller(settings, FakeModel([]), session_id=controller.session_id)
+    assert resumed.conversation == controller.conversation
+    assert any(
+        message.get("role") == "system" and "Conversation summary" in message.get("content", "")
+        for message in resumed.conversation
+    )
 
 
 def test_multiple_tool_calls_are_executed_in_model_order(settings: Settings) -> None:
@@ -211,3 +224,72 @@ def test_time_budget_and_keyboard_interrupt_are_persisted(settings: Settings) ->
     assert cancelled.exit_code == 130
     records = SessionStore(settings.data_dir).replay(cancelled.session_id)
     assert records[-1]["data"]["status"] == "cancelled"
+
+
+def test_escape_cancellation_stops_before_model_call(settings: Settings) -> None:
+    cancel_event = Event()
+    cancel_event.set()
+    model = FakeModel([text_response("must not run")])
+    result = make_controller(settings, model).run_turn("cancel this", cancel_event=cancel_event)
+    assert result.status is AgentState.CANCELLED
+    assert result.exit_code == 130
+    assert result.reason == "cancelled by Esc"
+    assert model.requests == []
+
+
+def test_resume_after_unanswered_turn_coalesces_provider_history(settings: Settings) -> None:
+    cancel_event = Event()
+    cancel_event.set()
+    cancelled_controller = make_controller(settings, FakeModel([]))
+    cancelled = cancelled_controller.run_turn("first request", cancel_event=cancel_event)
+
+    model = FakeModel([text_response("continued")])
+    resumed = make_controller(settings, model, session_id=cancelled.session_id)
+    result = resumed.run_turn("follow-up request")
+
+    assert result.status is AgentState.COMPLETED
+    request_messages = model.requests[0][0]
+    user_messages = [message for message in request_messages if message.get("role") == "user"]
+    assert len(user_messages) == 1
+    assert user_messages[0]["content"] == "first request\n\nfollow-up request"
+    assert [message.get("role") for message in resumed.conversation[:2]] == ["user", "user"]
+
+
+def test_provider_history_repairs_old_compact_boundary() -> None:
+    prepared = AgentController._messages_for_model(
+        [
+            {"role": "system", "content": "current instructions"},
+            {"role": "system", "content": "compact summary"},
+            {
+                "role": "assistant",
+                "content": None,
+                "tool_calls": [{"id": "orphan", "type": "function", "function": {}}],
+            },
+            {"role": "tool", "tool_call_id": "orphan", "content": "old result"},
+            {"role": "assistant", "content": "old answer"},
+            {"role": "user", "content": "first pending request"},
+            {"role": "user", "content": "second pending request"},
+        ]
+    )
+
+    assert [message["role"] for message in prepared] == ["system", "user"]
+    assert prepared[0]["content"] == "current instructions\n\ncompact summary"
+    assert prepared[1]["content"] == "first pending request\n\nsecond pending request"
+
+
+def test_provider_history_merges_adjacent_structured_user_content() -> None:
+    first = [{"type": "text", "text": "first"}]
+    second = [{"type": "text", "text": "second"}]
+
+    prepared = AgentController._messages_for_model(
+        [
+            {"role": "system", "content": "instructions"},
+            {"role": "user", "content": first},
+            {"role": "user", "content": second},
+        ]
+    )
+
+    assert prepared == [
+        {"role": "system", "content": "instructions"},
+        {"role": "user", "content": [*first, *second]},
+    ]

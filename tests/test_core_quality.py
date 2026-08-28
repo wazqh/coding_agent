@@ -92,6 +92,16 @@ def test_controller_restores_plan_and_available_skills(settings: Settings) -> No
     )
     sessions.append(session_id, "event", {"kind": "skill", "data": {"name": 12}})
     sessions.append(session_id, "event", {"kind": "skill", "data": {"name": "missing"}})
+    sessions.append(
+        session_id,
+        "event",
+        {"kind": "skill", "data": {"name": "demo", "action": "disabled"}},
+    )
+    sessions.append(
+        session_id,
+        "event",
+        {"kind": "skill", "data": {"name": "demo", "action": "enabled"}},
+    )
     sessions.append(session_id, "event", {"kind": "skill", "data": {"name": "demo"}})
     controller = make_controller(
         settings,
@@ -102,6 +112,20 @@ def test_controller_restores_plan_and_available_skills(settings: Settings) -> No
     )
     assert controller.working.plan[0]["step"] == "restore"
     assert controller.working.active_skills == ["demo"]
+    assert controller.skills is not None and controller.skills.skills["demo"].enabled
+
+    controller.set_skill_enabled("demo", False)
+    restored_skills = SkillRegistry(workspace=settings.cwd, user_root=settings.cwd / "user")
+    restored_skills.discover(include_repo=True)
+    restored = make_controller(
+        settings,
+        FakeModel([]),
+        sessions=sessions,
+        skills=restored_skills,
+        session_id=session_id,
+    )
+    assert restored.skills is not None and not restored.skills.skills["demo"].enabled
+    assert "demo" not in restored.working.active_skills
 
 
 def test_controller_reports_bad_explicit_skill_and_internal_error(settings: Settings) -> None:
@@ -293,7 +317,7 @@ def test_posix_subprocess_setup_is_platform_independent(
     assert result["exit_code"] == 0
     assert captured["argv"] == ["/bin/sh", "-c", "printf ok"]
     assert captured["start_new_session"] is True
-    assert captured["timeout"] == 1
+    assert 0 < captured["timeout"] <= 1
 
 
 def test_subprocess_interrupt_terminates_process_tree(

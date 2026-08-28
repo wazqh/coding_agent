@@ -46,6 +46,22 @@ class ApprovalPolicy:
         self._session_grants: set[str] = set()
         self.denied = False
 
+    @property
+    def session_grant_count(self) -> int:
+        return len(self._session_grants)
+
+    def set_mode(self, mode: str) -> bool:
+        """Change policy mode and revoke grants made under the previous mode."""
+
+        if mode not in {"prompt", "auto", "read-only"}:
+            raise ValueError(f"unknown permission mode: {mode}")
+        changed = mode != self.mode
+        if changed:
+            self.mode = mode
+            self._session_grants.clear()
+            self.denied = False
+        return changed
+
     def decide(self, request: ApprovalRequest) -> ApprovalDecision:
         if self.mode == "read-only":
             self.denied = True
