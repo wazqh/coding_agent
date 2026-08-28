@@ -5,6 +5,7 @@ __pycache__/
 .pytest_cache/
 pytest-cache-files-*/
 .test-tmp*/
+.test-runs/
 .mypy_cache/
 .ruff_cache/
 .coverage

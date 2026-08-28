@@ -294,3 +294,43 @@ def test_posix_subprocess_setup_is_platform_independent(
     assert captured["argv"] == ["/bin/sh", "-c", "printf ok"]
     assert captured["start_new_session"] is True
     assert captured["timeout"] == 1
+
+
+def test_subprocess_interrupt_terminates_process_tree(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    waits = 0
+    terminated: list[int] = []
+
+    class Process:
+        pid = 42
+
+        def wait(self, timeout: int) -> int:
+            nonlocal waits
+            waits += 1
+            if waits == 1:
+                raise KeyboardInterrupt
+            assert timeout == 3
+            return -1
+
+    monkeypatch.setattr(command_module.subprocess, "Popen", lambda *args, **kwargs: Process())
+    monkeypatch.setattr(
+        command_module,
+        "_terminate_tree",
+        lambda process: terminated.append(process.pid),
+    )
+    with pytest.raises(KeyboardInterrupt):
+        command_module.run_subprocess("cancel me", cwd=tmp_path, timeout=10)
+    assert terminated == [42]
+    assert waits == 2
+
+    waits = 0
+
+    def failed_termination(process: Process) -> None:
+        assert process.pid == 42
+        raise RuntimeError("cleanup failed")
+
+    monkeypatch.setattr(command_module, "_terminate_tree", failed_termination)
+    with pytest.raises(KeyboardInterrupt):
+        command_module.run_subprocess("cancel me", cwd=tmp_path, timeout=10)
+    assert waits == 1

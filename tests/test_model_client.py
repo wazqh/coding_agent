@@ -1,6 +1,9 @@
 from __future__ import annotations
 
+from collections.abc import Iterator
 from typing import Any
+
+import pytest
 
 from coding_agent.model_client import ModelClient
 
@@ -104,3 +107,26 @@ def test_retry_before_output_and_invalid_json() -> None:
     final = list(malformed.stream([], []))[-1]
     assert final.type == "error"
     assert "invalid JSON" in (final.error or "")
+
+
+def test_stream_is_closed_when_iteration_is_cancelled() -> None:
+    class InterruptingStream(Iterator[dict[str, Any]]):
+        def __init__(self) -> None:
+            self.closed = False
+
+        def __next__(self) -> dict[str, Any]:
+            raise KeyboardInterrupt
+
+        def close(self) -> None:
+            self.closed = True
+
+    stream = InterruptingStream()
+    client = ModelClient(
+        model="m",
+        api_key="x",
+        client=FakeClient([stream]),
+        max_retries=0,
+    )
+    with pytest.raises(KeyboardInterrupt):
+        list(client.stream([], []))
+    assert stream.closed

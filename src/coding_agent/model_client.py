@@ -75,37 +75,46 @@ class ModelClient:
                 calls: dict[int, dict[str, str]] = {}
                 finish_reason: str | None = None
                 usage: Usage | None = None
-                for chunk in chunks:
-                    raw_usage = _value(chunk, "usage")
-                    if raw_usage is not None:
-                        usage = Usage(
-                            prompt_tokens=int(_value(raw_usage, "prompt_tokens", 0) or 0),
-                            completion_tokens=int(_value(raw_usage, "completion_tokens", 0) or 0),
-                            total_tokens=int(_value(raw_usage, "total_tokens", 0) or 0),
-                        )
-                    choices = _value(chunk, "choices", []) or []
-                    if not choices:
-                        continue
-                    choice = choices[0]
-                    finish_reason = _value(choice, "finish_reason") or finish_reason
-                    delta = _value(choice, "delta", {}) or {}
-                    content = _value(delta, "content")
-                    if content:
-                        emitted = True
-                        yield ModelStreamEvent(type="text_delta", text=str(content))
-                    for fragment in _value(delta, "tool_calls", []) or []:
-                        index = int(_value(fragment, "index", 0) or 0)
-                        target = calls.setdefault(index, {"id": "", "name": "", "arguments": ""})
-                        fragment_id = _value(fragment, "id")
-                        if fragment_id:
-                            target["id"] += str(fragment_id)
-                        function = _value(fragment, "function", {}) or {}
-                        name = _value(function, "name")
-                        arguments = _value(function, "arguments")
-                        if name:
-                            target["name"] += str(name)
-                        if arguments:
-                            target["arguments"] += str(arguments)
+                try:
+                    for chunk in chunks:
+                        raw_usage = _value(chunk, "usage")
+                        if raw_usage is not None:
+                            usage = Usage(
+                                prompt_tokens=int(_value(raw_usage, "prompt_tokens", 0) or 0),
+                                completion_tokens=int(
+                                    _value(raw_usage, "completion_tokens", 0) or 0
+                                ),
+                                total_tokens=int(_value(raw_usage, "total_tokens", 0) or 0),
+                            )
+                        choices = _value(chunk, "choices", []) or []
+                        if not choices:
+                            continue
+                        choice = choices[0]
+                        finish_reason = _value(choice, "finish_reason") or finish_reason
+                        delta = _value(choice, "delta", {}) or {}
+                        content = _value(delta, "content")
+                        if content:
+                            emitted = True
+                            yield ModelStreamEvent(type="text_delta", text=str(content))
+                        for fragment in _value(delta, "tool_calls", []) or []:
+                            index = int(_value(fragment, "index", 0) or 0)
+                            target = calls.setdefault(
+                                index, {"id": "", "name": "", "arguments": ""}
+                            )
+                            fragment_id = _value(fragment, "id")
+                            if fragment_id:
+                                target["id"] += str(fragment_id)
+                            function = _value(fragment, "function", {}) or {}
+                            name = _value(function, "name")
+                            arguments = _value(function, "arguments")
+                            if name:
+                                target["name"] += str(name)
+                            if arguments:
+                                target["arguments"] += str(arguments)
+                finally:
+                    close = getattr(chunks, "close", None)
+                    if callable(close):
+                        close()
                 assembled: list[ToolCall] = []
                 for index in sorted(calls):
                     item = calls[index]

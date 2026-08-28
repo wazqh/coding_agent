@@ -245,10 +245,20 @@ def test_rich_renderer_all_event_variants() -> None:
             data={"reason": "stopped"},
         )
     )
+    renderer.handle(
+        AgentEvent(
+            kind=EventKind.DONE,
+            session_id="s",
+            state=AgentState.CANCELLED,
+            data={"reason": "cancelled"},
+        )
+    )
     renderer.render_plan([{"step": "unknown", "status": "other"}])
     renderer.markdown("# Result")
     renderer.status_table([("model", "fake")])
     assert RichRenderer._subject("not a mapping") == ""
     assert RichRenderer._subject({"pattern": "needle"}) == "  needle"
     text = output.getvalue()
-    assert all(word in text for word in ("hello", "failed", "broken", "careful", "demo"))
+    assert all(
+        word in text for word in ("hello", "failed", "cancelled", "broken", "careful", "demo")
+    )

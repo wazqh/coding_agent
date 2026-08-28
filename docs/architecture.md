@@ -24,7 +24,8 @@ reasoning. Tool calls execute in model order, and every result returns the fixed
 A valid assistant message without tool calls completes the turn. Identical failed calls warn after
 two attempts and stop after the third. A turn is bounded by 24 tool steps and ten minutes by default.
 Connection, timeout, rate-limit, and server failures receive bounded exponential retry in the model
-adapter; authentication and request errors do not.
+adapter; authentication and request errors do not. Cancellation closes an active model stream and
+terminates the complete command process tree before the cancelled turn is persisted.
 
 ## Persistence controls
 

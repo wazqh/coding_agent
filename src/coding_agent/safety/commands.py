@@ -135,6 +135,14 @@ def run_subprocess(
             timed_out = True
             _terminate_tree(process)
             exit_code = process.wait(timeout=3)
+        except BaseException:
+            # Ctrl+C and interpreter shutdown must not leave the command or its children running.
+            try:
+                _terminate_tree(process)
+                process.wait(timeout=3)
+            except BaseException:
+                pass
+            raise
         out_text, out_truncated = _bounded_decode(stdout)
         err_text, err_truncated = _bounded_decode(stderr)
     return {

@@ -105,7 +105,10 @@ class RichRenderer:
             self.console.print(f"[magenta]skill:[/] {event.data.get('name')} activated")
         elif event.kind is EventKind.DONE:
             state = event.state or AgentState.FAILED
-            style = "green" if state is AgentState.COMPLETED else "red"
+            style = {
+                AgentState.COMPLETED: "green",
+                AgentState.CANCELLED: "yellow",
+            }.get(state, "red")
             self.console.print(f"[{style}]{state.value}:[/] {event.data.get('reason', '')}")
 
     @staticmethod

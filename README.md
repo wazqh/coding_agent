@@ -36,8 +36,10 @@ coding-agent sessions [--output table|json]
 ```
 
 The interactive UI keeps normal terminal scrollback. Enter submits, Ctrl+J or Alt+Enter inserts a
-newline, Ctrl+G opens `$VISUAL`/`$EDITOR`, Ctrl+L clears, Ctrl+C cancels input, and Ctrl+D exits.
-Completion is available for slash commands, `$skills`, and `@workspace/files`.
+newline, Ctrl+G opens `$VISUAL`/`$EDITOR`, Ctrl+L clears, Ctrl+C cancels input or an active model or
+command operation, and Ctrl+D exits. Cancellation closes the model stream, terminates the command
+process tree, and records a resumable cancelled turn. Completion is available for slash commands,
+`$skills`, and `@workspace/files`.
 
 Supported commands are `/help`, `/status`, `/model`, `/permissions`, `/plan`, `/diff`, `/memory`,
 `/skills`, `/compact`, `/resume`, `/new`, `/clear`, `/raw`, and `/exit`.
