@@ -6,9 +6,17 @@ from pathlib import Path
 from threading import Event
 from types import SimpleNamespace
 
+from prompt_toolkit import PromptSession
+from prompt_toolkit.application.current import set_app
+from prompt_toolkit.buffer import CompletionState
+from prompt_toolkit.completion import Completion
 from prompt_toolkit.document import Document
+from prompt_toolkit.input import DummyInput
+from prompt_toolkit.output import DummyOutput
+from prompt_toolkit.utils import get_cwidth
 from rich.console import Console
 
+import coding_agent.ui.prompt as prompt_module
 from coding_agent.config import Settings
 from coding_agent.controller import AgentController
 from coding_agent.events import AgentEvent, AgentState, EventKind
@@ -19,7 +27,12 @@ from coding_agent.skills import SkillRegistry
 from coding_agent.tools.registry import default_registry
 from coding_agent.ui.cancel import EscapeMonitor
 from coding_agent.ui.completion import AgentCompleter
-from coding_agent.ui.prompt import InteractiveShell, _PromptBackgroundProcessor
+from coding_agent.ui.prompt import (
+    InteractiveShell,
+    _continuation,
+    _prompt_style,
+    _PromptBackgroundProcessor,
+)
 from coding_agent.ui.render import JsonlRenderer, RichRenderer
 
 
@@ -111,7 +124,239 @@ def test_user_input_background_is_applied_before_submission() -> None:
 
     style, content = transformation.fragments[0]
     assert content == "inspect the repository"
-    assert "bg:#202a38" in style
+    assert style == "class:composer-text"
+
+
+def test_idle_composer_is_content_height_plus_vertical_padding(
+    tmp_path: Path,
+    monkeypatch,  # type: ignore[no-untyped-def]
+) -> None:
+    class NoopModel:
+        model = "fake"
+
+        def stream(self, messages, tools):  # type: ignore[no-untyped-def]
+            return iter(())
+
+    settings = Settings(
+        cwd=tmp_path,
+        data_dir=tmp_path / "data",
+        model={"name": "fake", "api_key": "test"},
+    )
+    skills = SkillRegistry(workspace=tmp_path, user_root=tmp_path / "user")
+    skills.discover(include_repo=False)
+    real_prompt_session = PromptSession
+
+    def prompt_session(**kwargs):  # type: ignore[no-untyped-def]
+        return real_prompt_session(input=DummyInput(), output=DummyOutput(), **kwargs)
+
+    monkeypatch.setattr(prompt_module, "PromptSession", prompt_session)
+    controller = AgentController(
+        settings=settings,
+        model=NoopModel(),  # type: ignore[arg-type]
+        tools=default_registry(),
+        sessions=SessionStore(settings.data_dir),
+        approval=ApprovalPolicy("prompt"),
+        skills=skills,
+    )
+    shell = InteractiveShell(
+        controller=controller,
+        controller_factory=lambda _: controller,
+        renderer=RichRenderer(console=Console(file=StringIO(), color_system=None)),
+        history_file=tmp_path / "history",
+    )
+
+    assert shell.composer is not None
+    shell.session.default_buffer._load_history_task = object()
+    with set_app(shell.session.app):
+        dimension = shell.composer.preferred_height(100, 24)
+
+    assert (dimension.min, dimension.preferred, dimension.max) == (3, 3, 3)
+
+
+def test_completion_menu_expands_outside_compact_composer(
+    tmp_path: Path,
+    monkeypatch,  # type: ignore[no-untyped-def]
+) -> None:
+    class NoopModel:
+        model = "fake"
+
+        def stream(self, messages, tools):  # type: ignore[no-untyped-def]
+            return iter(())
+
+    settings = Settings(
+        cwd=tmp_path,
+        data_dir=tmp_path / "data",
+        model={"name": "fake", "api_key": "test"},
+    )
+    skills = SkillRegistry(workspace=tmp_path, user_root=tmp_path / "user")
+    skills.discover(include_repo=False)
+    real_prompt_session = PromptSession
+
+    def prompt_session(**kwargs):  # type: ignore[no-untyped-def]
+        return real_prompt_session(input=DummyInput(), output=DummyOutput(), **kwargs)
+
+    monkeypatch.setattr(prompt_module, "PromptSession", prompt_session)
+    controller = AgentController(
+        settings=settings,
+        model=NoopModel(),  # type: ignore[arg-type]
+        tools=default_registry(),
+        sessions=SessionStore(settings.data_dir),
+        approval=ApprovalPolicy("prompt"),
+        skills=skills,
+    )
+    shell = InteractiveShell(
+        controller=controller,
+        controller_factory=lambda _: controller,
+        renderer=RichRenderer(console=Console(file=StringIO(), color_system=None)),
+        history_file=tmp_path / "history",
+    )
+    assert shell.composer is not None
+    shell.session.default_buffer._load_history_task = object()
+    shell.session.default_buffer.complete_state = CompletionState(
+        original_document=Document("/"),
+        completions=[Completion("/help"), Completion("/status")],
+    )
+
+    with set_app(shell.session.app):
+        composer_height = shell.composer.preferred_height(100, 24).preferred
+        layout_height = shell.session.layout.container.preferred_height(100, 24).preferred
+
+    assert composer_height == 3
+    assert layout_height > composer_height
+    assert shell.completion_window is not None
+    assert not shell.completion_window.dont_extend_width()
+    with set_app(shell.session.app):
+        assert shell.completion_window.preferred_height(100, 24).preferred == 2
+
+
+def test_no_color_removes_processor_and_prompt_toolkit_default_colors(
+    monkeypatch,  # type: ignore[no-untyped-def]
+) -> None:
+    monkeypatch.setenv("NO_COLOR", "1")
+    transformation = _PromptBackgroundProcessor().apply_transformation(
+        SimpleNamespace(fragments=[("", "task")])  # type: ignore[arg-type]
+    )
+    session: PromptSession[str] = PromptSession(
+        input=DummyInput(), output=DummyOutput(), style=_prompt_style()
+    )
+
+    assert transformation.fragments[0][0] == "class:composer-text"
+    toolbar = session.app._merged_style.get_attrs_for_style_str("class:bottom-toolbar")
+    completion_meta = session.app._merged_style.get_attrs_for_style_str(
+        "class:completion-menu.meta.completion"
+    )
+    assert not toolbar.reverse and toolbar.bgcolor == "default"
+    assert completion_meta.color == "default" and completion_meta.bgcolor == "default"
+
+
+def test_completion_menu_uses_one_background_across_command_and_description(
+    monkeypatch,  # type: ignore[no-untyped-def]
+) -> None:
+    monkeypatch.delenv("NO_COLOR", raising=False)
+    session: PromptSession[str] = PromptSession(
+        input=DummyInput(), output=DummyOutput(), style=_prompt_style()
+    )
+
+    completion = session.app._merged_style.get_attrs_for_style_str(
+        "class:completion-menu.completion"
+    )
+    meta = session.app._merged_style.get_attrs_for_style_str(
+        "class:completion-menu.meta.completion"
+    )
+    current = session.app._merged_style.get_attrs_for_style_str(
+        "class:completion-menu.completion.current"
+    )
+    current_meta = session.app._merged_style.get_attrs_for_style_str(
+        "class:completion-menu.meta.completion.current"
+    )
+
+    assert meta.bgcolor == completion.bgcolor
+    assert current_meta.bgcolor == current.bgcolor
+
+
+def test_wrapped_input_continuation_aligns_without_a_marker() -> None:
+    assert _continuation(2, 1, 80) == [("class:continuation", "  ")]
+
+
+def test_turn_sections_use_one_rule_for_direct_output_and_two_after_activity() -> None:
+    def render(*events: AgentEvent) -> list[str]:
+        output = StringIO()
+        renderer = RichRenderer(console=Console(file=output, color_system=None, width=80))
+        renderer.start_turn_status(
+            lambda: {
+                "max_steps": 24,
+                "context_tokens": 0,
+                "context_window": 32768,
+            }
+        )
+        for event in events:
+            renderer.handle(event)
+        renderer.stop_turn_status()
+        return [line.strip() for line in output.getvalue().splitlines()]
+
+    text = AgentEvent(kind=EventKind.TEXT, session_id="s", data={"delta": "answer"})
+    done = AgentEvent(
+        kind=EventKind.DONE,
+        session_id="s",
+        state=AgentState.COMPLETED,
+        data={"reason": "done"},
+    )
+    tool = AgentEvent(
+        kind=EventKind.TOOL_CALL,
+        session_id="s",
+        data={"name": "read_file", "arguments": {"path": "README.md"}},
+    )
+    result = AgentEvent(
+        kind=EventKind.TOOL_RESULT,
+        session_id="s",
+        data={"result": {"ok": True, "summary": "read README.md"}},
+    )
+
+    direct = render(text, done)
+    with_activity = render(tool, result, text, done)
+    expected_rule = "─" * 78
+    assert direct.count(expected_rule) == 1
+    assert with_activity.count(expected_rule) == 2
+    for lines in (direct, with_activity):
+        for index, line in enumerate(lines):
+            if line == expected_rule:
+                assert index + 1 < len(lines)
+                assert lines[index + 1] != ""
+                if index:
+                    assert lines[index - 1] != ""
+
+
+def test_completed_turn_uses_full_width_rule_before_next_prompt() -> None:
+    output = StringIO()
+    renderer = RichRenderer(console=Console(file=output, color_system=None, width=80))
+    renderer.start_turn_status(
+        lambda: {"max_steps": 24, "context_tokens": 0, "context_window": 32768}
+    )
+    renderer.handle(AgentEvent(kind=EventKind.TEXT, session_id="s", data={"delta": "answer"}))
+    renderer.handle(
+        AgentEvent(
+            kind=EventKind.DONE,
+            session_id="s",
+            state=AgentState.COMPLETED,
+            data={"reason": "done"},
+        )
+    )
+    renderer.stop_turn_status()
+
+    renderer.prompt_boundary()
+
+    lines = [line.strip() for line in output.getvalue().splitlines()]
+    completed = next(index for index, line in enumerate(lines) if "completed" in line)
+    assert lines[completed + 1] == "─" * 78
+
+
+def test_header_uses_same_width_as_wide_terminal() -> None:
+    output = StringIO()
+    renderer = RichRenderer(console=Console(file=output, color_system=None, width=140))
+
+    renderer.header(model="fake", cwd="repo", permissions="prompt")
+
+    assert max(len(line) for line in output.getvalue().splitlines()) == 140
 
 
 def test_all_agent_output_uses_the_same_response_indent() -> None:
@@ -160,10 +405,13 @@ def test_all_agent_output_uses_the_same_response_indent() -> None:
     result_index = next(index for index, line in enumerate(lines) if "read README.md" in line)
     assert lines[call_index].startswith("  ")
     assert result_index == call_index + 1
-    for marker in ("Plan", "Approval required", "Result", "completed"):
+    for marker in ("Plan", "Approval required", "completed"):
         index = next(index for index, line in enumerate(lines) if marker in line)
         assert lines[index].startswith("  ")
         assert lines[index - 1] == ""
+    response_index = next(index for index, line in enumerate(lines) if "Result" in line)
+    assert lines[response_index].startswith("  ")
+    assert lines[response_index - 1].strip() == "─" * 78
     assert not any(left == right == "" for left, right in pairwise(lines))
 
 
@@ -290,6 +538,77 @@ def test_runtime_status_stays_live_during_tools_and_streaming() -> None:
     assert "context left" in rendered
     assert "Forge Coding Agent" not in rendered
     assert "Done" in rendered
+
+
+def test_runtime_status_uses_available_columns_instead_of_fixed_breakpoint() -> None:
+    renderer = RichRenderer(
+        console=Console(file=StringIO(), color_system=None, force_terminal=False, width=79)
+    )
+    renderer.start_turn_status(
+        lambda: {
+            "max_steps": 8,
+            "context_tokens": 128,
+            "context_window": 32768,
+        }
+    )
+
+    status = renderer._runtime_status_text().plain
+
+    assert "context left" in status
+    assert get_cwidth(status) <= 76
+
+
+def test_runtime_status_keeps_one_blank_line_above_live_footer() -> None:
+    output = StringIO()
+    renderer = RichRenderer(
+        console=Console(file=output, color_system=None, force_terminal=False, width=80)
+    )
+    renderer.start_turn_status(
+        lambda: {"max_steps": 8, "context_tokens": 0, "context_window": 32768}
+    )
+
+    renderer.console.print(renderer._turn_renderable())
+
+    lines = output.getvalue().splitlines()
+    assert lines[0].strip() == ""
+    assert "Working" in lines[1]
+
+
+def test_renderer_reflows_new_output_when_visible_width_changes() -> None:
+    output = StringIO()
+    visible_width = 48
+    renderer = RichRenderer(
+        console=Console(file=output, color_system=None, force_terminal=False, width=160)
+    )
+    renderer.set_viewport_width_provider(lambda: visible_width)
+
+    renderer.markdown("word " * 30)
+    first_render = output.getvalue().splitlines()
+    assert max(get_cwidth(line) for line in first_render) <= 48
+
+    visible_width = 32
+    renderer.prompt_boundary()
+
+    assert renderer.console.width == 32
+    assert output.getvalue().splitlines()[-1].strip() == "─" * 30
+
+
+def test_live_status_rechecks_visible_width_during_refresh() -> None:
+    visible_width = 80
+    renderer = RichRenderer(
+        console=Console(file=StringIO(), color_system="standard", force_terminal=True, width=160)
+    )
+    renderer.set_viewport_width_provider(lambda: visible_width)
+    renderer.start_turn_status(
+        lambda: {"max_steps": 8, "context_tokens": 0, "context_window": 32768}
+    )
+    assert renderer._turn_live is not None
+
+    visible_width = 45
+    renderer._turn_live.get_renderable()
+
+    assert renderer.console.width == 45
+    renderer.stop_turn_status()
 
 
 def test_diff_rendering_and_escape_monitor() -> None:

@@ -7,6 +7,7 @@ from types import SimpleNamespace
 from typing import Any
 
 import pytest
+from prompt_toolkit.completion import ThreadedCompleter
 from prompt_toolkit.keys import Keys
 from rich.console import Console
 
@@ -38,10 +39,14 @@ class FakePromptSession:
         self.completer = kwargs.get("completer")
         self.erase_when_done = kwargs.get("erase_when_done")
         self.input_processors = kwargs.get("input_processors", [])
+        self.style = kwargs.get("style")
+        size = SimpleNamespace(columns=80, rows=24)
+        self.output = SimpleNamespace(get_size=lambda: size)
+        self.output_size = size
 
 
 def make_shell(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, *, width: int = 80
 ) -> tuple[InteractiveShell, AgentController, StringIO]:
     monkeypatch.setattr(prompt_module, "PromptSession", FakePromptSession)
     skill_dir = tmp_path / ".agents" / "skills" / "demo"
@@ -67,7 +72,7 @@ def make_shell(
         skills=skills,
     )
     output = StringIO()
-    renderer = RichRenderer(console=Console(file=output, color_system=None, width=80))
+    renderer = RichRenderer(console=Console(file=output, color_system=None, width=width))
 
     def factory(session_id: str | None) -> AgentController:
         if session_id == "bad":
@@ -80,6 +85,7 @@ def make_shell(
         renderer=renderer,
         history_file=tmp_path / "history",
     )
+    shell.session.output_size.columns = width  # type: ignore[attr-defined]
     assert shell.session.erase_when_done is not True  # type: ignore[attr-defined]
     assert any(
         isinstance(processor, _PromptBackgroundProcessor)
@@ -88,7 +94,6 @@ def make_shell(
     toolbar = "".join(fragment for _, fragment in shell._bottom_toolbar())
     assert "fake-model" in toolbar
     assert "context left" in toolbar
-    assert tmp_path.name in toolbar
     assert "Forge Coding Agent" not in toolbar
     return shell, controller, output
 
@@ -104,6 +109,24 @@ def test_interactive_shell_requires_skills(tmp_path: Path, monkeypatch: pytest.M
             renderer=renderer,
             history_file=tmp_path / "history",
         )
+
+
+def test_composer_keeps_spacing_without_color_styles(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setenv("NO_COLOR", "1")
+    shell, _, _ = make_shell(tmp_path, monkeypatch)
+
+    composer = shell.session.style.get_attrs_for_style_str("class:composer")  # type: ignore[attr-defined]
+    assert composer.bgcolor == ""
+
+
+def test_workspace_completion_runs_off_the_input_thread(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    shell, _, _ = make_shell(tmp_path, monkeypatch)
+
+    assert isinstance(shell.session.completer, ThreadedCompleter)  # type: ignore[attr-defined]
 
 
 def test_key_bindings_dispatch_to_buffer() -> None:
@@ -177,8 +200,12 @@ def test_shell_wraps_each_task_with_runtime_status(
         calls.append("stop")
         original_stop()
 
+    def boundary() -> None:
+        calls.append("boundary")
+
     monkeypatch.setattr(shell.renderer, "start_turn_status", start)
     monkeypatch.setattr(shell.renderer, "stop_turn_status", stop)
+    monkeypatch.setattr(shell.renderer, "prompt_boundary", boundary, raising=False)
     values: Iterator[str | BaseException] = iter(["inspect", EOFError()])
 
     class SequenceSession:
@@ -192,7 +219,27 @@ def test_shell_wraps_each_task_with_runtime_status(
 
     shell.session = SequenceSession()  # type: ignore[assignment]
     assert shell.run() == 0
-    assert calls == ["start", "stop"]
+    assert calls == ["start", "stop", "boundary"]
+
+
+def test_bottom_toolbar_never_exceeds_available_columns(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    shell, _, _ = make_shell(tmp_path, monkeypatch, width=38)
+
+    toolbar = "".join(fragment for _, fragment in shell._bottom_toolbar())
+
+    assert "fake-model" in toolbar
+    assert len(toolbar) <= 38
+
+
+def test_shell_uses_prompt_toolkit_visible_width_for_rich_output(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    shell, _, _ = make_shell(tmp_path, monkeypatch, width=47)
+    shell.renderer.console.width = 160
+
+    assert shell.renderer._width() == 47
 
 
 def test_exit_command_prints_session_resume_hint(
@@ -377,8 +424,8 @@ def test_memory_and_skill_slash_commands(tmp_path: Path, monkeypatch: pytest.Mon
 
 def test_skill_summary_removes_model_trigger_metadata() -> None:
     description = "Short user-facing summary. USE FOR: " + "trigger " * 100
-    assert InteractiveShell._skill_summary(description) == "Short user-facing summary."
-    assert InteractiveShell._skill_summary("word " * 100).endswith("…")
+    assert InteractiveShell._skill_summary(description, width=150) == "Short user-facing summary."
+    assert InteractiveShell._skill_summary("word " * 100, width=150).endswith("…")
 
 
 def test_rich_renderer_all_event_variants() -> None:
@@ -429,8 +476,8 @@ def test_rich_renderer_all_event_variants() -> None:
     renderer.render_plan([{"step": "unknown", "status": "other"}])
     renderer.markdown("# Result")
     renderer.status_table([("model", "fake")])
-    assert RichRenderer._subject("not a mapping") == ""
-    assert RichRenderer._subject({"pattern": "needle"}) == "  needle"
+    assert renderer._subject("not a mapping") == ""
+    assert renderer._subject({"pattern": "needle"}) == "  needle"
     text = output.getvalue()
     assert all(
         word in text for word in ("hello", "failed", "cancelled", "broken", "careful", "demo")

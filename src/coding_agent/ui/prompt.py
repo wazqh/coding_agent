@@ -1,18 +1,39 @@
 from __future__ import annotations
 
+import os
 from collections.abc import Callable
+from contextlib import suppress
 from datetime import datetime
 from pathlib import Path
 from textwrap import shorten
 from threading import Event
 
 from prompt_toolkit import PromptSession
-from prompt_toolkit.formatted_text import AnyFormattedText, StyleAndTextTuples
+from prompt_toolkit.application.current import get_app
+from prompt_toolkit.completion import ThreadedCompleter
+from prompt_toolkit.filters import has_completions, is_done, to_filter
+from prompt_toolkit.formatted_text import (
+    AnyFormattedText,
+    StyleAndTextTuples,
+    fragment_list_width,
+)
 from prompt_toolkit.history import FileHistory
 from prompt_toolkit.key_binding import KeyBindings
+from prompt_toolkit.layout import Layout
+from prompt_toolkit.layout.containers import (
+    ConditionalContainer,
+    FloatContainer,
+    HSplit,
+    ScrollOffsets,
+    Window,
+)
+from prompt_toolkit.layout.dimension import Dimension
+from prompt_toolkit.layout.margins import ScrollbarMargin
+from prompt_toolkit.layout.menus import CompletionsMenuControl
 from prompt_toolkit.layout.processors import Processor, Transformation, TransformationInput
 from prompt_toolkit.shortcuts import CompleteStyle
 from prompt_toolkit.styles import Style
+from prompt_toolkit.utils import get_cwidth
 from rich.console import Console, Group
 from rich.prompt import Prompt
 from rich.table import Table
@@ -32,15 +53,44 @@ ControllerFactory = Callable[[str | None], AgentController]
 _PROMPT_STYLE = Style.from_dict(
     {
         "prompt": "bold #59b8ff bg:#202a38",
+        "composer": "#eef3fa bg:#202a38",
+        "composer-text": "#eef3fa bg:#202a38",
         "continuation": "#637083 bg:#202a38",
-        "bottom-toolbar": "#637083",
+        "bottom-toolbar": "#637083 bg:#11161e noreverse",
         "bottom-toolbar.model": "bold #8ba7c9",
         "bottom-toolbar.accent": "#59b8ff",
         "placeholder": "#637083 italic",
         "completion-menu": "bg:#172033 #d7deea",
+        "completion-menu.completion": "bg:#172033 #d7deea noreverse",
         "completion-menu.completion.current": "bg:#31558a #ffffff",
+        "completion-menu.meta.completion": "bg:#172033 #9aa8ba noreverse",
+        "completion-menu.meta.completion.current": "bg:#31558a #ffffff noreverse",
+        "completion-menu.multi-column-meta": "bg:#172033 #9aa8ba noreverse",
     }
 )
+
+_PROMPT_NO_COLOR_STYLE = Style.from_dict(
+    {
+        "prompt": "bold",
+        "composer": "",
+        "composer-text": "",
+        "continuation": "",
+        "bottom-toolbar": "fg:default bg:default noreverse",
+        "bottom-toolbar.model": "bold",
+        "bottom-toolbar.accent": "",
+        "placeholder": "italic",
+        "completion-menu": "fg:default bg:default noreverse",
+        "completion-menu.completion": "fg:default bg:default noreverse",
+        "completion-menu.completion.current": "fg:default bg:default reverse",
+        "completion-menu.meta.completion": "fg:default bg:default noreverse",
+        "completion-menu.meta.completion.current": "fg:default bg:default reverse",
+        "completion-menu.multi-column-meta": "fg:default bg:default noreverse",
+    }
+)
+
+
+def _prompt_style() -> Style:
+    return _PROMPT_NO_COLOR_STYLE if os.environ.get("NO_COLOR") else _PROMPT_STYLE
 
 
 class _PromptBackgroundProcessor(Processor):
@@ -51,16 +101,75 @@ class _PromptBackgroundProcessor(Processor):
         for fragment in transformation_input.fragments:
             if len(fragment) == 2:
                 style, text = fragment
-                fragments.append((f"{style} bg:#202a38 #eef3fa", text))
+                fragments.append((f"{style} class:composer-text".strip(), text))
             else:
                 style, text, handler = fragment
-                fragments.append((f"{style} bg:#202a38 #eef3fa", text, handler))
+                fragments.append((f"{style} class:composer-text".strip(), text, handler))
         return Transformation(fragments)
 
 
 def _continuation(width: int, line_number: int, soft_wrap_width: int) -> AnyFormattedText:
     del line_number, soft_wrap_width
-    return [("class:continuation", "· ".rjust(width))]
+    return [("class:continuation", " " * width)]
+
+
+def _install_compact_composer(
+    session: PromptSession[str],
+) -> tuple[HSplit | None, Window | None]:
+    """Install a compact editor with completion rows outside its background."""
+
+    layout = getattr(session, "layout", None)
+    if layout is None or not isinstance(layout.container, HSplit):
+        return None, None
+    original_root = layout.container
+    if not original_root.children:
+        return None, None
+    main_wrapper = original_root.children[0]
+    if not isinstance(main_wrapper, ConditionalContainer):
+        return None, None
+    main_input = main_wrapper.alternative_content
+    if not isinstance(main_input, FloatContainer) or not isinstance(main_input.content, HSplit):
+        return None, None
+
+    editor = layout.current_window
+    editor.height = Dimension(min=1)
+    editor.style = "class:composer"
+    editor.dont_extend_height = to_filter(True)
+    composer = HSplit(
+        [
+            Window(height=1, char=" ", style="class:composer"),
+            *main_input.content.children,
+            Window(height=1, char=" ", style="class:composer"),
+        ],
+        style="class:composer",
+    )
+
+    def completion_height() -> Dimension:
+        state = get_app().current_buffer.complete_state
+        count = len(state.completions) if state is not None else 1
+        rows = get_app().output.get_size().rows
+        visible = min(count, max(1, rows // 3))
+        return Dimension.exact(visible)
+
+    completion_window = Window(
+        content=CompletionsMenuControl(),
+        height=completion_height,
+        scroll_offsets=ScrollOffsets(top=1, bottom=1),
+        right_margins=[ScrollbarMargin(display_arrows=True)],
+        dont_extend_height=True,
+        style="class:completion-menu",
+    )
+    completion_menu = ConditionalContainer(
+        completion_window,
+        filter=has_completions & ~is_done,
+    )
+    compact_layout = Layout(
+        HSplit([composer, completion_menu, *original_root.children[1:]]),
+        focused_element=editor,
+    )
+    session.layout = compact_layout
+    session.app.layout = compact_layout
+    return composer, completion_window
 
 
 def _bindings() -> KeyBindings:
@@ -103,19 +212,33 @@ class InteractiveShell:
             raise ValueError("interactive shell requires a skill registry")
         self.session: PromptSession[str] = PromptSession(
             history=FileHistory(str(history_file)),
-            completer=AgentCompleter(controller.settings.cwd, controller.skills),
+            completer=self._completer(),
             key_bindings=_bindings(),
             multiline=True,
             complete_while_typing=True,
-            complete_style=CompleteStyle.MULTI_COLUMN,
-            reserve_space_for_menu=6,
+            complete_style=CompleteStyle.COLUMN,
+            reserve_space_for_menu=0,
             enable_open_in_editor=True,
             input_processors=[_PromptBackgroundProcessor()],
             prompt_continuation=_continuation,
             bottom_toolbar=self._bottom_toolbar,
             placeholder=[("class:placeholder", "Describe a task or type /help")],
-            style=_PROMPT_STYLE,
+            style=_prompt_style(),
         )
+        self.composer, self.completion_window = _install_compact_composer(self.session)
+        self.renderer.set_viewport_width_provider(self._terminal_width)
+
+    def _terminal_width(self) -> int:
+        """Return prompt_toolkit's current visible terminal width."""
+
+        output = getattr(self.session, "output", None)
+        width: int | None = None
+        if output is not None:
+            with suppress(AttributeError, OSError, TypeError, ValueError):
+                width = int(output.get_size().columns)
+        width = max(1, width if width is not None else self.console.width)
+        self.console.width = width
+        return width
 
     def run(self) -> int:
         self.renderer.header(
@@ -141,7 +264,6 @@ class InteractiveShell:
                     self._session_handoff()
                     return 0
                 continue
-            self.renderer.section_break(force=True)
             self.renderer.start_turn_status(self._runtime_status)
             cancel_event = Event()
             try:
@@ -152,6 +274,7 @@ class InteractiveShell:
                     self.controller.run_turn(value, cancel_event=cancel_event)
             finally:
                 self.renderer.stop_turn_status()
+            self.renderer.prompt_boundary()
 
     def _runtime_status(self) -> dict[str, object]:
         settings = self.controller.settings
@@ -188,17 +311,22 @@ class InteractiveShell:
         completed = sum(item.get("status") == "completed" for item in self.controller.working.plan)
         total = len(self.controller.working.plan)
         used = min(100, int(tokens * 100 / max(1, settings.agent.context_window)))
-        fragments = [
+        candidates = [
             ("class:bottom-toolbar.model", f" {settings.model.name}"),
             ("class:bottom-toolbar", f" · {100 - used}% context left"),
             ("class:bottom-toolbar", f" · {settings.cwd.name}"),
         ]
-        if total and self.console.width >= 80:
-            fragments.append(("class:bottom-toolbar.accent", f" · plan {completed}/{total}"))
-        if self.console.width >= 110:
-            fragments.append(("class:bottom-toolbar", f" · {self.controller.approval.mode}"))
-        if memory_enabled and self.console.width >= 130:
-            fragments.append(("class:bottom-toolbar", " · memory"))
+        if total:
+            candidates.append(("class:bottom-toolbar.accent", f" · plan {completed}/{total}"))
+        candidates.append(("class:bottom-toolbar", f" · {self.controller.approval.mode}"))
+        if memory_enabled:
+            candidates.append(("class:bottom-toolbar", " · memory"))
+
+        fragments: StyleAndTextTuples = []
+        available = self._terminal_width()
+        for candidate in candidates:
+            if not fragments or fragment_list_width([*fragments, candidate]) <= available:
+                fragments.append(candidate)
         return fragments
 
     def _slash(self, raw: str) -> bool:
@@ -452,11 +580,17 @@ class InteractiveShell:
             Text.assemble(("Recent context", "bold"), (f"  last {len(visible)} turns", "dim"))
         )
         for user_text, assistant_messages in visible:
-            user_summary = shorten(user_text, width=160, placeholder="…")
-            self.console.print(Text.assemble(("› you     ", "bold cyan"), user_summary))
+            user_prefix = "› you     "
+            user_width = max(5, self._terminal_width() - get_cwidth(user_prefix))
+            user_summary = shorten(user_text, width=user_width, placeholder="…")
+            self.console.print(Text.assemble((user_prefix, "bold cyan"), user_summary))
             if assistant_messages:
-                assistant_summary = shorten(assistant_messages[-1], width=160, placeholder="…")
-                self.console.print(Text.assemble((f"  {PRODUCT_NAME}  ", "dim"), assistant_summary))
+                assistant_prefix = f"  {PRODUCT_NAME}  "
+                assistant_width = max(5, self._terminal_width() - get_cwidth(assistant_prefix))
+                assistant_summary = shorten(
+                    assistant_messages[-1], width=assistant_width, placeholder="…"
+                )
+                self.console.print(Text.assemble((assistant_prefix, "dim"), assistant_summary))
             else:
                 self.console.print("[dim]  no assistant response recorded[/]")
 
@@ -490,7 +624,7 @@ class InteractiveShell:
         for index, item in enumerate(candidates, 1):
             updated = self._session_time(str(item.get("updated_at", "")))
             title = " ".join(str(item.get("title", "")).split())
-            title = shorten(title, width=70, placeholder="…") if title else "(untitled session)"
+            title = title or "(untitled session)"
             session_id = str(item["id"])
             model = str(item.get("model", ""))
             details = Text.assemble(
@@ -648,7 +782,7 @@ class InteractiveShell:
             self.console.print(f"[yellow]{diagnostic}[/]")
 
     @staticmethod
-    def _skill_summary(description: object, width: int = 150) -> str:
+    def _skill_summary(description: object, *, width: int) -> str:
         value = " ".join(str(description).split())
         folded = value.casefold()
         cut_points = [
@@ -686,7 +820,11 @@ class InteractiveShell:
                 (f"${name}", "bold cyan"),
                 ("  " + " · ".join(labels), "dim"),
             )
-            summary = Text(self._skill_summary(item["description"]), style="dim")
+            summary_width = max(5, self._terminal_width() - 4)
+            summary = Text(
+                self._skill_summary(item["description"], width=summary_width),
+                style="dim",
+            )
             table.add_row(marker, Group(heading, summary))
         self.console.print(table)
 
@@ -695,8 +833,8 @@ class InteractiveShell:
         self._management_hint("manage", "/skills enable|disable NAME · /skills reload")
         self._management_hint("activate", "$NAME followed by your task")
 
-    def _completer(self) -> AgentCompleter:
+    def _completer(self) -> ThreadedCompleter:
         skills = self.controller.skills
         if skills is None:
             raise ValueError("interactive shell requires a skill registry")
-        return AgentCompleter(self.controller.settings.cwd, skills)
+        return ThreadedCompleter(AgentCompleter(self.controller.settings.cwd, skills))
