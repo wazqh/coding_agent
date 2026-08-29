@@ -9,7 +9,7 @@ from coding_agent.config import ConfigError, load_settings
 
 def test_config_priority_and_untrusted_project(tmp_path: Path) -> None:
     (tmp_path / "coding-agent.toml").write_text(
-        "[agent]\nmax_steps=7\n[model]\nname='project'\n", encoding="utf-8"
+        "[agent]\nmax_steps=12\n[model]\nname='project'\n", encoding="utf-8"
     )
     untrusted = load_settings(
         tmp_path,
@@ -23,10 +23,10 @@ def test_config_priority_and_untrusted_project(tmp_path: Path) -> None:
         tmp_path,
         trusted_project=True,
         environ={"CODING_AGENT_MODEL": "env", "OPENAI_API_KEY": "secret"},
-        cli={"model": {"name": "cli"}, "agent": {"max_steps": 3}},
+        cli={"model": {"name": "cli"}, "agent": {"max_steps": 13}},
         data_dir=tmp_path / "data",
     )
-    assert trusted.agent.max_steps == 3
+    assert trusted.agent.max_steps == 13
     assert trusted.model.name == "cli"
 
 
@@ -35,5 +35,12 @@ def test_invalid_config_and_workspace(tmp_path: Path) -> None:
     with pytest.raises(ConfigError):
         load_settings(missing, data_dir=tmp_path / "data")
     (tmp_path / "coding-agent.toml").write_text("[agent]\nmax_steps=0", encoding="utf-8")
+    with pytest.raises(ConfigError):
+        load_settings(tmp_path, trusted_project=True, data_dir=tmp_path / "data")
+
+
+def test_max_steps_rejects_values_below_twelve(tmp_path: Path) -> None:
+    (tmp_path / "coding-agent.toml").write_text("[agent]\nmax_steps=11\n", encoding="utf-8")
+
     with pytest.raises(ConfigError):
         load_settings(tmp_path, trusted_project=True, data_dir=tmp_path / "data")

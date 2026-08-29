@@ -6,7 +6,7 @@ from pathlib import Path
 from typing import Any
 
 from platformdirs import user_data_path
-from pydantic import BaseModel, ConfigDict, Field, ValidationError
+from pydantic import BaseModel, ConfigDict, Field, PrivateAttr, ValidationError
 
 
 class ConfigError(ValueError):
@@ -15,10 +15,18 @@ class ConfigError(ValueError):
 
 class AgentSettings(BaseModel):
     model_config = ConfigDict(extra="forbid")
-    max_steps: int = Field(default=24, ge=1, le=100)
+    max_steps: int = Field(default=24, ge=12, le=100)
     max_seconds: int = Field(default=600, ge=10, le=3600)
     context_window: int = Field(default=32768, ge=4096)
     command_timeout: int = Field(default=120, ge=1, le=300)
+    _configured_max_steps: int = PrivateAttr(default=24)
+
+    @property
+    def configured_max_steps(self) -> int:
+        return self._configured_max_steps
+
+    def capture_configured_max_steps(self) -> None:
+        self._configured_max_steps = self.max_steps
 
 
 class MemorySettings(BaseModel):

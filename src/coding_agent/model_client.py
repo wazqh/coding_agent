@@ -5,7 +5,8 @@ import random
 import time
 from collections.abc import Callable, Iterator, Sequence
 from contextlib import suppress
-from typing import Any
+from copy import deepcopy
+from typing import Any, Literal
 
 from openai import OpenAI
 
@@ -14,6 +15,9 @@ from coding_agent.events import ModelStreamEvent, ToolCall, Usage
 
 class ModelProtocolError(RuntimeError):
     pass
+
+
+Compatibility = Literal["openai", "gemini"]
 
 
 def _value(obj: Any, key: str, default: Any = None) -> Any:
@@ -41,6 +45,7 @@ class ModelClient:
         api_key: str,
         base_url: str | None = None,
         max_retries: int = 3,
+        compatibility: Compatibility = "openai",
         client: Any | None = None,
         sleep: Callable[[float], None] = time.sleep,
     ) -> None:
@@ -49,16 +54,60 @@ class ModelClient:
         self.model = model
         self.base_url = base_url
         self.max_retries = max_retries
+        if compatibility not in {"openai", "gemini"}:
+            raise ValueError("compatibility must be openai or gemini")
+        self.compatibility = compatibility
         self._sleep = sleep
         # Retry in one place so the controller's configured retry budget is exact.
         self._client = client or OpenAI(api_key=api_key, base_url=base_url, max_retries=0)
+
+    def reconfigure(
+        self,
+        *,
+        model: str,
+        api_key: str,
+        base_url: str | None,
+        compatibility: Compatibility = "openai",
+        max_retries: int | None = None,
+    ) -> None:
+        if compatibility not in {"openai", "gemini"}:
+            raise ValueError("compatibility must be openai or gemini")
+        replacement = OpenAI(api_key=api_key, base_url=base_url, max_retries=0)
+        self._client = replacement
+        self.model = model
+        self.base_url = base_url
+        self.compatibility = compatibility
+        if max_retries is not None:
+            self.max_retries = max_retries
+
+    def _request_messages(self, messages: Sequence[dict[str, Any]]) -> list[dict[str, Any]]:
+        prepared = deepcopy(list(messages))
+        if self.compatibility == "gemini":
+            return prepared
+        for message in prepared:
+            tool_calls = message.get("tool_calls")
+            if not isinstance(tool_calls, list):
+                continue
+            for call in tool_calls:
+                if not isinstance(call, dict):
+                    continue
+                extra = call.get("extra_content")
+                if not isinstance(extra, dict) or "google" not in extra:
+                    continue
+                remaining = dict(extra)
+                remaining.pop("google", None)
+                if remaining:
+                    call["extra_content"] = remaining
+                else:
+                    call.pop("extra_content", None)
+        return prepared
 
     def _create_stream(
         self, messages: Sequence[dict[str, Any]], tools: Sequence[dict[str, Any]]
     ) -> Any:
         request: dict[str, Any] = {
             "model": self.model,
-            "messages": list(messages),
+            "messages": self._request_messages(messages),
             "stream": True,
             "stream_options": {"include_usage": True},
         }

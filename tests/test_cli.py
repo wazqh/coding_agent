@@ -8,7 +8,8 @@ import pytest
 pytest.importorskip("typer")
 from typer.testing import CliRunner
 
-from coding_agent.cli import app
+from coding_agent.cli import _build_runtime, app
+from coding_agent.workspace_settings import WorkspaceSettingsStore
 
 
 def test_version_and_help() -> None:
@@ -46,3 +47,61 @@ def test_sessions_rejects_unknown_output(tmp_path: Path, monkeypatch: pytest.Mon
     monkeypatch.setenv("CODING_AGENT_DATA_DIR", str(tmp_path / "data"))
     result = CliRunner().invoke(app, ["sessions", "--output", "yaml"])
     assert result.exit_code == 2
+
+
+def test_runtime_restores_workspace_max_steps_override(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    data_dir = tmp_path / "data"
+    monkeypatch.setenv("CODING_AGENT_DATA_DIR", str(data_dir))
+    monkeypatch.setenv("OPENAI_API_KEY", "test-key")
+    WorkspaceSettingsStore(data_dir=data_dir, workspace=tmp_path).set_max_steps(48)
+
+    controller, _, _ = _build_runtime(
+        cwd=tmp_path,
+        model_name=None,
+        permissions="read-only",
+        interactive=False,
+        output="jsonl",
+        trust_project=False,
+    )
+
+    assert controller.settings.agent.max_steps == 48
+
+
+def test_runtime_uses_persisted_provider_without_openai_api_key(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    data_dir = tmp_path / "data"
+    data_dir.mkdir()
+    (data_dir / "models.toml").write_text(
+        """
+default_provider = "gemini"
+[providers.gemini]
+base_url = "https://gemini.example/v1"
+api_key_env = "GEMINI_API_KEY"
+default_model = "gemini-flash"
+models = ["gemini-flash", "gemini-pro"]
+compatibility = "gemini"
+""".strip()
+        + "\n",
+        encoding="utf-8",
+    )
+    monkeypatch.setenv("CODING_AGENT_DATA_DIR", str(data_dir))
+    monkeypatch.setenv("GEMINI_API_KEY", "gemini-secret")
+    monkeypatch.delenv("OPENAI_API_KEY", raising=False)
+
+    controller, _, _ = _build_runtime(
+        cwd=tmp_path,
+        model_name="gemini-pro",
+        permissions="read-only",
+        interactive=False,
+        output="jsonl",
+        trust_project=False,
+    )
+
+    assert controller.settings.model.name == "gemini-pro"
+    assert controller.settings.model.base_url == "https://gemini.example/v1"
+    assert controller.model.compatibility == "gemini"
+    assert controller.model_manager is not None
+    assert controller.model_manager.provider == "gemini"

@@ -16,6 +16,7 @@ from coding_agent.context import ContextManager, estimate_request_tokens
 from coding_agent.events import AgentEvent, AgentState, EventKind, ToolCall
 from coding_agent.memory import MemoryStore
 from coding_agent.model_client import ModelClient
+from coding_agent.model_runtime import ModelManager
 from coding_agent.project import project_id
 from coding_agent.safety.approval import ApprovalPolicy
 from coding_agent.safety.paths import WorkspacePaths
@@ -50,9 +51,11 @@ class AgentController:
         session_id: str | None = None,
         event_sink: EventSink | None = None,
         monotonic: Callable[[], float] = time.monotonic,
+        model_manager: ModelManager | None = None,
     ) -> None:
         self.settings = settings
         self.model = model
+        self.model_manager = model_manager
         self.tools = tools
         self.sessions = sessions
         self.approval = approval

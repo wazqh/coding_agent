@@ -21,6 +21,7 @@ from coding_agent.config import Settings
 from coding_agent.controller import AgentController
 from coding_agent.events import AgentEvent, AgentState, EventKind
 from coding_agent.memory import MemoryStore
+from coding_agent.model_catalog import ModelCatalog
 from coding_agent.safety.approval import ApprovalPolicy
 from coding_agent.session import SessionStore
 from coding_agent.skills import SkillRegistry
@@ -98,6 +99,36 @@ def test_jsonl_renderer_and_completions(tmp_path: Path) -> None:
     assert "会话" in str(status_completion.display_meta)
     assert any(item.text == "$demo" for item in skill)
     assert any(item.text == "@alpha.py" for item in files)
+
+
+def test_model_and_steps_argument_completion(tmp_path: Path) -> None:
+    skills = SkillRegistry(workspace=tmp_path, user_root=tmp_path / "user")
+    skills.discover(include_repo=False)
+    catalog_path = tmp_path / "models.toml"
+    catalog_path.write_text(
+        """
+default_provider = "gemini"
+[providers.gemini]
+api_key_env = "GEMINI_API_KEY"
+default_model = "gemini-flash"
+models = ["gemini-flash", "gemini-pro"]
+""".strip()
+        + "\n",
+        encoding="utf-8",
+    )
+    completer = AgentCompleter(
+        tmp_path,
+        skills,
+        model_catalog=ModelCatalog(path=catalog_path, environ={}),
+    )
+
+    providers = list(completer.get_completions(Document("/model use ge"), object()))
+    models = list(completer.get_completions(Document("/model use gemini gemini-p"), object()))
+    steps = list(completer.get_completions(Document("/steps r"), object()))
+
+    assert [item.text for item in providers] == ["gemini"]
+    assert [item.text for item in models] == ["gemini-pro"]
+    assert [item.text for item in steps] == ["reset"]
 
 
 def test_streamed_assistant_text_is_rendered_as_markdown() -> None:

@@ -88,6 +88,14 @@ class SessionStore:
                 ),
                 {},
             )
+            configuration = next(
+                (
+                    item["data"]
+                    for item in reversed(records)
+                    if item["type"] == "configuration" and isinstance(item["data"], dict)
+                ),
+                {},
+            )
             sessions.append(
                 {
                     "id": path.stem,
@@ -95,7 +103,7 @@ class SessionStore:
                     "title": first_user[:80],
                     "records": len(records),
                     "workspace": str(metadata.get("workspace", "")),
-                    "model": str(metadata.get("model", "")),
+                    "model": str(configuration.get("model", metadata.get("model", ""))),
                 }
             )
         return sorted(sessions, key=lambda item: str(item["updated_at"]), reverse=True)

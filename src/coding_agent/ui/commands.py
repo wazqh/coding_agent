@@ -26,9 +26,20 @@ COMMAND_SPECS = (
     ),
     SlashCommandSpec(
         "/model",
-        ("/model", "/model MODEL_ID"),
+        (
+            "/model",
+            "/model MODEL_ID",
+            "/model use PROVIDER [MODEL_ID]",
+            "/model reload",
+        ),
         "查看或切换当前进程使用的模型。",
-        "切换只影响当前进程及随后新建或恢复的会话，不修改项目配置。",
+        "Provider 来自用户 models.toml；活动选择会保存，但 API Key 始终只从环境变量读取。",
+    ),
+    SlashCommandSpec(
+        "/steps",
+        ("/steps", "/steps 12-100", "/steps reset"),
+        "查看或设置当前工作区的工具步骤预算。",
+        "工作区覆盖保存在 Forge 本机数据中，不修改仓库；新值从下一轮任务开始生效。",
     ),
     SlashCommandSpec(
         "/permissions",

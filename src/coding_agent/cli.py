@@ -17,7 +17,9 @@ from coding_agent.branding import COMMAND_NAME, PRODUCT_NAME
 from coding_agent.config import ConfigError, load_settings
 from coding_agent.controller import AgentController
 from coding_agent.memory import MemoryStore
-from coding_agent.model_client import ModelClient
+from coding_agent.model_catalog import ModelCatalog, ModelSelectionStore
+from coding_agent.model_client import Compatibility, ModelClient
+from coding_agent.model_runtime import ModelManager
 from coding_agent.project import TrustManager, load_agents_instructions
 from coding_agent.safety.approval import ApprovalDecision, ApprovalPolicy, ApprovalRequest
 from coding_agent.session import SessionError, SessionStore
@@ -25,6 +27,7 @@ from coding_agent.skills import SkillRegistry
 from coding_agent.tools.registry import default_registry
 from coding_agent.ui.prompt import ControllerFactory, InteractiveShell
 from coding_agent.ui.render import JsonlRenderer, RichRenderer
+from coding_agent.workspace_settings import WorkspaceSettingsStore
 
 app = typer.Typer(
     name=COMMAND_NAME,
@@ -139,6 +142,35 @@ def _build_runtime(
         cli=overlay,
         data_dir=data_dir,
     )
+    settings.agent.capture_configured_max_steps()
+    workspace_settings = WorkspaceSettingsStore(data_dir=data_dir, workspace=workspace)
+    max_steps_override = workspace_settings.load().max_steps
+    if max_steps_override is not None:
+        settings.agent.max_steps = max_steps_override
+    catalog = ModelCatalog(path=data_dir / "models.toml", environ=os.environ)
+    model_state = ModelSelectionStore(data_dir=data_dir)
+    active_model = model_state.load()
+    provider = "legacy"
+    compatibility: Compatibility = (
+        "gemini"
+        if settings.model.base_url
+        and "generativelanguage.googleapis.com" in settings.model.base_url
+        else "openai"
+    )
+    if catalog.providers():
+        provider = (
+            active_model.provider
+            if active_model is not None and active_model.provider in catalog.providers()
+            else catalog.default_provider or ""
+        )
+        selected_name = model_name
+        if selected_name is None and active_model is not None and active_model.provider == provider:
+            selected_name = active_model.model
+        selected = catalog.resolve(provider, selected_name)
+        settings.model.name = selected.model
+        settings.model.base_url = selected.base_url
+        settings.model.api_key = selected.api_key
+        compatibility = selected.compatibility
     if not settings.model.api_key:
         raise ConfigError("OPENAI_API_KEY is not set")
     if output not in {"rich", "jsonl"}:
@@ -155,6 +187,14 @@ def _build_runtime(
         api_key=settings.model.api_key,
         base_url=settings.model.base_url,
         max_retries=settings.model.max_retries,
+        compatibility=compatibility,
+    )
+    model_manager = ModelManager(
+        client=model,
+        settings=settings,
+        catalog=catalog,
+        state=model_state,
+        provider=provider,
     )
     sessions = SessionStore(settings.data_dir)
     instructions = load_agents_instructions(settings.cwd) if trusted else ""
@@ -189,6 +229,7 @@ def _build_runtime(
             agents_instructions=instructions,
             session_id=resume_id,
             event_sink=renderer.handle,
+            model_manager=model_manager,
         )
 
     controller = factory(session_id)
@@ -243,6 +284,13 @@ def main(
             controller_factory=factory,
             renderer=renderer,
             history_file=history,
+            workspace_settings=WorkspaceSettingsStore(
+                data_dir=controller.settings.data_dir,
+                workspace=controller.settings.cwd,
+            ),
+            configured_max_steps=getattr(
+                getattr(controller.settings, "agent", None), "configured_max_steps", 24
+            ),
         )
         raise typer.Exit(shell.run())
     except (ConfigError, SessionError, OSError, ValueError) as exc:
@@ -306,6 +354,13 @@ def resume_command(
             controller_factory=factory,
             renderer=renderer,
             history_file=controller.settings.data_dir / "prompt-history.txt",
+            workspace_settings=WorkspaceSettingsStore(
+                data_dir=controller.settings.data_dir,
+                workspace=controller.settings.cwd,
+            ),
+            configured_max_steps=getattr(
+                getattr(controller.settings, "agent", None), "configured_max_steps", 24
+            ),
         )
         raise typer.Exit(shell.run())
     except (ConfigError, SessionError, OSError, ValueError) as exc:

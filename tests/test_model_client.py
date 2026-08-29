@@ -207,6 +207,42 @@ def test_non_retryable_authentication_error_is_not_retried() -> None:
     assert len(fake.chat.completions.requests) == 1
 
 
+@pytest.mark.parametrize(
+    ("compatibility", "keeps_signature"), [("openai", False), ("gemini", True)]
+)
+def test_request_filters_google_thought_signature_by_provider(
+    compatibility: str, keeps_signature: bool
+) -> None:
+    fake = FakeClient([FakeStream([])])
+    client = ModelClient(
+        model="m",
+        api_key="x",
+        client=fake,
+        compatibility=compatibility,
+        max_retries=0,
+    )
+    messages = [
+        {
+            "role": "assistant",
+            "content": None,
+            "tool_calls": [
+                {
+                    "id": "call-1",
+                    "type": "function",
+                    "function": {"name": "read_file", "arguments": "{}"},
+                    "extra_content": {"google": {"thought_signature": "sig-1"}},
+                }
+            ],
+        }
+    ]
+
+    list(client.stream(messages, []))
+
+    request_call = fake.chat.completions.requests[0]["messages"][0]["tool_calls"][0]
+    assert ("extra_content" in request_call) is keeps_signature
+    assert "extra_content" in messages[0]["tool_calls"][0]  # type: ignore[index]
+
+
 def test_stream_is_closed_when_iteration_is_cancelled() -> None:
     class InterruptingStream(FakeStream):
         def __iter__(self) -> Iterator[dict[str, Any]]:

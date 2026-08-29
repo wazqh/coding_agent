@@ -42,11 +42,13 @@ from rich.text import Text
 from coding_agent.branding import MODULE_NAME, PRODUCT_NAME
 from coding_agent.controller import AgentController
 from coding_agent.memory import MemoryError
+from coding_agent.model_catalog import ModelCatalogError
 from coding_agent.session import SessionError
 from coding_agent.ui.cancel import EscapeMonitor
 from coding_agent.ui.commands import COMMAND_BY_NAME, COMMAND_SPECS, normalize_command_name
 from coding_agent.ui.completion import AgentCompleter
 from coding_agent.ui.render import RichRenderer
+from coding_agent.workspace_settings import WorkspaceSettingsError, WorkspaceSettingsStore
 
 ControllerFactory = Callable[[str | None], AgentController]
 
@@ -203,13 +205,21 @@ class InteractiveShell:
         controller_factory: ControllerFactory,
         renderer: RichRenderer,
         history_file: Path,
+        workspace_settings: WorkspaceSettingsStore | None = None,
+        configured_max_steps: int | None = None,
     ) -> None:
         self.controller = controller
         self.controller_factory = controller_factory
         self.renderer = renderer
-        self.console: Console = renderer.console
         if controller.skills is None:
             raise ValueError("interactive shell requires a skill registry")
+        self.workspace_settings = workspace_settings
+        self.configured_max_steps = (
+            configured_max_steps
+            if configured_max_steps is not None
+            else controller.settings.agent.max_steps
+        )
+        self.console: Console = renderer.console
         self.session: PromptSession[str] = PromptSession(
             history=FileHistory(str(history_file)),
             completer=self._completer(),
@@ -329,6 +339,108 @@ class InteractiveShell:
                 fragments.append(candidate)
         return fragments
 
+    def _model(self, argument: str) -> None:
+        manager = self.controller.model_manager
+        if not argument:
+            provider = manager.provider if manager is not None else "legacy"
+            self.console.print(
+                f"model: [cyan]{provider}[/] / [cyan]{self.controller.settings.model.name}[/]"
+            )
+            if manager is not None:
+                for name in manager.catalog.providers():
+                    profile = manager.catalog.config.providers[name]
+                    models = ", ".join(profile.models) or profile.default_model
+                    marker = "›" if name == manager.provider else " "
+                    self.console.print(
+                        Text.assemble(
+                            (f"{marker} {name:<12}", "bold cyan" if marker == "›" else "dim"),
+                            (models, "dim"),
+                        )
+                    )
+            self._management_hint("model", "/model MODEL_ID", "current provider")
+            self._management_hint("provider", "/model use PROVIDER [MODEL_ID]")
+            self._management_hint("catalog", "/model reload")
+            return
+
+        parts = argument.split()
+        previous_provider = manager.provider if manager is not None else "legacy"
+        previous_model = self.controller.settings.model.name
+        try:
+            if parts == ["reload"]:
+                if manager is None:
+                    raise ModelCatalogError("model catalog is unavailable")
+                manager.reload()
+                self.console.print(
+                    f"model catalog reloaded: {len(manager.catalog.providers())} providers"
+                )
+                return
+            if parts and parts[0] == "use":
+                if manager is None:
+                    raise ModelCatalogError("model catalog is unavailable")
+                if len(parts) not in {2, 3}:
+                    self._usage("/model")
+                    return
+                selected = manager.switch(parts[1], parts[2] if len(parts) == 3 else None)
+            else:
+                if len(parts) != 1:
+                    self._usage("/model")
+                    return
+                if manager is not None:
+                    selected = manager.switch_model(parts[0])
+                else:
+                    self.controller.settings.model.name = parts[0]
+                    self.controller.model.model = parts[0]
+                    selected = None
+        except (ModelCatalogError, RuntimeError, ValueError) as exc:
+            self.console.print(f"[red]model switch failed:[/] {exc}")
+            return
+
+        provider = selected.provider if selected is not None else previous_provider
+        model = selected.model if selected is not None else parts[0]
+        if (previous_provider, previous_model) == (provider, model):
+            self.console.print(f"model unchanged: [cyan]{provider}[/] / [cyan]{model}[/]")
+            return
+        self.controller.sessions.append(
+            self.controller.session_id,
+            "configuration",
+            {"provider": provider, "model": model},
+        )
+        self.console.print(
+            f"model changed: [dim]{previous_provider}/{previous_model}[/] → "
+            f"[cyan]{provider}/{model}[/]"
+        )
+
+    def _steps(self, argument: str) -> None:
+        current = self.controller.settings.agent.max_steps
+        if not argument:
+            self.console.print(f"max steps: [cyan]{current}[/] [dim](workspace)[/]")
+            self._management_hint("change", "/steps 12-100", "applies next turn")
+            self._management_hint("reset", "/steps reset", "restore configured default")
+            return
+        if argument == "reset":
+            if self.workspace_settings is not None:
+                self.workspace_settings.reset_max_steps()
+            self.controller.settings.agent.max_steps = self.configured_max_steps
+            self.console.print(
+                f"max steps reset: [cyan]{self.configured_max_steps}[/] "
+                "[dim](workspace; applies next turn)[/]"
+            )
+            return
+        try:
+            value = int(argument)
+            if not 12 <= value <= 100:
+                raise ValueError
+            if self.workspace_settings is not None:
+                self.workspace_settings.set_max_steps(value)
+        except (ValueError, WorkspaceSettingsError):
+            self.console.print("[red]max steps must be an integer between 12 and 100[/]")
+            return
+        self.controller.settings.agent.max_steps = value
+        self.console.print(
+            f"max steps changed: [dim]{current}[/] → [cyan]{value}[/] "
+            "[dim](workspace; applies next turn)[/]"
+        )
+
     def _slash(self, raw: str) -> bool:
         command, _, argument = raw.partition(" ")
         command = command.casefold()
@@ -349,23 +461,9 @@ class InteractiveShell:
             else:
                 self._usage(command)
         elif command == "/model":
-            if argument:
-                if len(argument.split()) != 1:
-                    self._usage(command)
-                    return False
-                previous = self.controller.settings.model.name
-                self.controller.settings.model.name = argument
-                self.controller.model.model = argument
-                if previous == argument:
-                    self.console.print(f"model unchanged: [cyan]{argument}[/]")
-                else:
-                    self.console.print(
-                        f"model changed: [dim]{previous}[/] → [cyan]{argument}[/] "
-                        "[dim](current process; configuration unchanged)[/]"
-                    )
-            else:
-                self.console.print(f"model: [cyan]{self.controller.settings.model.name}[/]")
-            self._management_hint("change", "/model MODEL_ID", "current process only")
+            self._model(argument)
+        elif command == "/steps":
+            self._steps(argument)
         elif command == "/permissions":
             if argument:
                 if argument not in {"prompt", "auto", "read-only"}:
@@ -499,10 +597,15 @@ class InteractiveShell:
         project_resources = bool(
             self.controller.agents_instructions or (skills is not None and skills.include_repo)
         )
+        model_manager = self.controller.model_manager
+        model_label = self.controller.settings.model.name
+        if model_manager is not None:
+            model_label = f"{model_manager.provider}/{model_label}"
         self.renderer.status_table(
             [
                 ("session", self.controller.session_id),
-                ("model", self.controller.settings.model.name),
+                ("model", model_label),
+                ("max steps", str(self.controller.settings.agent.max_steps)),
                 ("workspace", str(self.controller.settings.cwd)),
                 (
                     "permissions",
@@ -837,4 +940,11 @@ class InteractiveShell:
         skills = self.controller.skills
         if skills is None:
             raise ValueError("interactive shell requires a skill registry")
-        return ThreadedCompleter(AgentCompleter(self.controller.settings.cwd, skills))
+        manager = self.controller.model_manager
+        return ThreadedCompleter(
+            AgentCompleter(
+                self.controller.settings.cwd,
+                skills,
+                model_catalog=manager.catalog if manager is not None else None,
+            )
+        )

@@ -16,12 +16,16 @@ from coding_agent.config import Settings
 from coding_agent.controller import AgentController
 from coding_agent.events import AgentEvent, AgentState, EventKind, ModelStreamEvent
 from coding_agent.memory import MemoryStore
+from coding_agent.model_catalog import ModelCatalog, ModelSelectionStore
+from coding_agent.model_client import ModelClient
+from coding_agent.model_runtime import ModelManager
 from coding_agent.safety.approval import ApprovalPolicy
 from coding_agent.session import SessionError, SessionStore
 from coding_agent.skills import SkillRegistry
 from coding_agent.tools.registry import default_registry
 from coding_agent.ui.prompt import InteractiveShell, _bindings, _PromptBackgroundProcessor
 from coding_agent.ui.render import RichRenderer
+from coding_agent.workspace_settings import WorkspaceSettingsStore
 
 
 class TextModel:
@@ -84,6 +88,10 @@ def make_shell(
         controller_factory=factory,
         renderer=renderer,
         history_file=tmp_path / "history",
+        workspace_settings=WorkspaceSettingsStore(
+            data_dir=settings.data_dir, workspace=settings.cwd
+        ),
+        configured_max_steps=24,
     )
     shell.session.output_size.columns = width  # type: ignore[attr-defined]
     assert shell.session.erase_when_done is not True  # type: ignore[attr-defined]
@@ -366,9 +374,87 @@ def test_slash_commands_cover_state_and_errors(
     assert "管理当前项目的长期记忆" in text
     assert "unknown command" in text
     assert "estimated request tokens" in text
+    assert "max steps" in text
     assert "/model MODEL_ID" in text
     assert "/permissions prompt|auto|read-only" in text
     assert "/raw on|off" in text
+
+
+def test_steps_command_persists_workspace_override_and_resets_default(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    shell, controller, output = make_shell(tmp_path, monkeypatch)
+
+    assert not shell._slash("/steps 40")
+    assert controller.settings.agent.max_steps == 40
+    assert shell.workspace_settings is not None
+    assert shell.workspace_settings.load().max_steps == 40
+
+    assert not shell._slash("/steps reset")
+    assert controller.settings.agent.max_steps == 24
+    assert shell.workspace_settings.load().max_steps is None
+    assert "next turn" in output.getvalue()
+
+
+@pytest.mark.parametrize("value", ["11", "101", "not-a-number"])
+def test_steps_command_rejects_invalid_values_without_changing_budget(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, value: str
+) -> None:
+    shell, controller, output = make_shell(tmp_path, monkeypatch)
+
+    assert not shell._slash(f"/steps {value}")
+
+    assert controller.settings.agent.max_steps == 24
+    assert "12" in output.getvalue() and "100" in output.getvalue()
+
+
+def test_model_command_switches_provider_and_keeps_legacy_model_syntax(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    shell, controller, output = make_shell(tmp_path, monkeypatch)
+    catalog_path = tmp_path / "data" / "models.toml"
+    catalog_path.parent.mkdir(parents=True, exist_ok=True)
+    catalog_path.write_text(
+        """
+default_provider = "gemini"
+[providers.gemini]
+base_url = "https://gemini.example/v1"
+api_key_env = "GEMINI_API_KEY"
+default_model = "gemini-flash"
+models = ["gemini-flash", "gemini-pro"]
+compatibility = "gemini"
+""".strip()
+        + "\n",
+        encoding="utf-8",
+    )
+    monkeypatch.setattr("coding_agent.model_client.OpenAI", lambda **kwargs: object())
+    client = ModelClient(model="legacy", api_key="legacy-key", client=object())
+    controller.model = client
+    controller.model_manager = ModelManager(
+        client=client,
+        settings=controller.settings,
+        catalog=ModelCatalog(path=catalog_path, environ={"GEMINI_API_KEY": "gemini-secret"}),
+        state=ModelSelectionStore(data_dir=tmp_path / "data"),
+        provider="legacy",
+    )
+
+    assert not shell._slash("/model use gemini gemini-pro")
+    assert controller.model_manager.provider == "gemini"
+    assert controller.settings.model.name == "gemini-pro"
+    configuration = [
+        record
+        for record in controller.sessions.replay(controller.session_id)
+        if record["type"] == "configuration"
+    ][-1]["data"]
+    assert configuration == {"provider": "gemini", "model": "gemini-pro"}
+    assert controller.sessions.list()[0]["model"] == "gemini-pro"
+
+    assert not shell._slash("/model gemini-flash")
+    assert controller.settings.model.name == "gemini-flash"
+    assert not shell._slash("/model reload")
+    assert not shell._slash("/model")
+    assert "gemini" in output.getvalue()
+    assert "gemini-flash" in output.getvalue()
 
 
 def test_memory_and_skill_slash_commands(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:

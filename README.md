@@ -26,6 +26,36 @@ coding-agent --cwd .
 arguments, project configuration, or saved memory. On Windows, `python -m coding_agent` works even
 when the user-level Python Scripts directory is not on `PATH`.
 
+### Multiple OpenAI-compatible providers
+
+Create `models.toml` in the Forge user data directory (the directory selected by
+`CODING_AGENT_DATA_DIR`, or the platform default) to reuse provider profiles across projects. The
+file stores only the environment-variable name that contains each API key; secret values are never
+written to the catalog or active-selection state.
+
+```toml
+default_provider = "gemini"
+
+[providers.gemini]
+base_url = "https://generativelanguage.googleapis.com/v1beta/openai/"
+api_key_env = "GEMINI_API_KEY"
+default_model = "gemini-3.7-flash"
+models = ["gemini-3.7-flash", "gemini-3.1-pro"]
+compatibility = "gemini"
+
+[providers.deepseek]
+base_url = "https://api.deepseek.com/v1"
+api_key_env = "DEEPSEEK_API_KEY"
+default_model = "deepseek-chat"
+models = ["deepseek-chat", "deepseek-reasoner"]
+```
+
+Use `/model use PROVIDER [MODEL_ID]` to change provider, `/model MODEL_ID` to change the
+model within the current provider, and `/model reload` after editing the catalog. The active
+provider and model are restored on the next launch. `--model` temporarily overrides the restored
+model while retaining the selected provider. Without `models.toml`, the existing `OPENAI_API_KEY`,
+`OPENAI_BASE_URL`, and `CODING_AGENT_MODEL` flow remains unchanged.
+
 ### Gemini through the OpenAI-compatible endpoint
 
 Gemini keys can be used without installing a second SDK. Set all three variables in the same
@@ -72,7 +102,8 @@ Interactive management commands are:
 | --- | --- |
 | `/help [COMMAND]` | List commands with descriptions or show detailed usage for one command. |
 | `/status` | Show the current session, model, permissions, context, plan, memory, and skills. |
-| `/model [MODEL_ID]` | Inspect or change the model for the current process. |
+| `/model ...` | Inspect models, switch the current model/provider, or reload `models.toml`. |
+| `/steps [12-100|reset]` | Inspect or persist the tool-step budget for this workspace. |
 | `/permissions [MODE]` | Inspect or change `prompt`, `auto`, or `read-only` approval policy. |
 | `/plan` / `/diff` | Inspect the current plan or edits applied in this process. |
 | `/memory ...` | List, enable, disable, remember, forget, or explicitly clear project memory. |
@@ -94,9 +125,11 @@ CLI > environment > trusted coding-agent.toml > defaults
 ```
 
 Copy [`coding-agent.toml.example`](coding-agent.toml.example) when project configuration is useful.
-The defaults limit a turn to 24 tool steps, ten minutes, and 120 seconds per command. Non-interactive
-execution returns code 3 when an approval would be required; configuration failures return 2 and
-user cancellation returns 130.
+The defaults limit a turn to 24 tool steps, ten minutes, and 120 seconds per command. Valid tool-step
+budgets are 12 through 100. `/steps N` stores an override under Forge's user data directory, keyed
+by repository identity like project Memory, and never edits the workspace; `/steps reset` restores
+the trusted project value or the default. Non-interactive execution returns code 3 when an approval
+would be required; configuration failures return 2 and user cancellation returns 130.
 
 ## Safety model
 
