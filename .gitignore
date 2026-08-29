@@ -23,3 +23,4 @@ build/
 tmp/
 coding-agent.toml.local
 .env
+.worktrees/
