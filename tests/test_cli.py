@@ -2,12 +2,14 @@ from __future__ import annotations
 
 import json
 from pathlib import Path
+from typing import NoReturn
 
 import pytest
 
 pytest.importorskip("typer")
 from typer.testing import CliRunner
 
+import coding_agent.cli as cli_module
 from coding_agent.cli import _build_runtime, app
 from coding_agent.workspace_settings import WorkspaceSettingsStore
 
@@ -19,6 +21,22 @@ def test_version_and_help() -> None:
     assert version.exit_code == 0 and "1.0.0" in version.stdout
     assert help_result.exit_code == 0
     assert "sessions" in help_result.stdout and "resume" in help_result.stdout
+
+
+def test_web_command_reports_exact_optional_install_when_dependency_is_missing(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    def missing_launcher() -> NoReturn:
+        error = ModuleNotFoundError("No module named 'fastapi'")
+        error.name = "fastapi"
+        raise error
+
+    monkeypatch.setattr(cli_module, "_load_web_launcher", missing_launcher, raising=False)
+
+    result = CliRunner().invoke(app, ["web", "--cwd", str(tmp_path)])
+
+    assert result.exit_code == 2
+    assert 'pip install -e ".[web]"' in result.stderr
 
 
 def test_sessions_json_uses_configured_data_dir(

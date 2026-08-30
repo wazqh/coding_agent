@@ -21,6 +21,10 @@ dist/
 build/
 *.egg-info/
 tmp/
+.tmp/
 coding-agent.toml.local
 .env
 .worktrees/
+node_modules/
+web/dist-electron/
+*.tsbuildinfo

@@ -35,3 +35,4 @@ def test_plan_rejects_multiple_active_steps_and_updates_state(tmp_path: Path) ->
         context,
     )
     assert valid.ok and working.plan[0]["status"] == "completed"
+    assert working.plan_turn_id == "turn"

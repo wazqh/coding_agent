@@ -85,6 +85,54 @@ def test_agent_loop_tool_observation_then_completion(settings: Settings) -> None
     assert SessionStore(settings.data_dir).messages(result.session_id)
 
 
+def test_completed_turn_warns_when_its_visible_plan_was_not_closed(settings: Settings) -> None:
+    plan_call = ToolCall(
+        id="plan",
+        name="update_plan",
+        arguments={
+            "plan": [
+                {"step": "Inspect", "status": "completed"},
+                {"step": "Explain", "status": "in_progress"},
+                {"step": "Verify", "status": "pending"},
+            ]
+        },
+    )
+    model = FakeModel([tool_response(plan_call), text_response("Here is the final answer.")])
+    events: list = []
+    controller = make_controller(settings, model, events=events)
+
+    result = controller.run_turn("make and follow a plan")
+
+    assert result.status is AgentState.COMPLETED
+    warning = next(
+        event
+        for event in events
+        if event.kind is EventKind.WARNING and event.data.get("code") == "PLAN_INCOMPLETE"
+    )
+    assert warning.data["completed"] == 1
+    assert warning.data["total"] == 3
+    system_prompt = str(model.requests[0][0][0]["content"])
+    assert "final response" in system_prompt
+    assert "update the visible plan" in system_prompt
+
+
+def test_completed_turn_does_not_warn_about_an_older_unfinished_plan(settings: Settings) -> None:
+    events: list = []
+    controller = make_controller(
+        settings, FakeModel([text_response("A new answer.")]), events=events
+    )
+    controller.working.plan = [{"step": "Old task", "status": "in_progress"}]
+    controller.working.plan_turn_id = "older-turn"
+
+    result = controller.run_turn("unrelated follow-up")
+
+    assert result.status is AgentState.COMPLETED
+    assert not any(
+        event.kind is EventKind.WARNING and event.data.get("code") == "PLAN_INCOMPLETE"
+        for event in events
+    )
+
+
 def test_loop_guard_stops_third_identical_failure(settings: Settings) -> None:
     call = ToolCall(id="same", name="does_not_exist", arguments={})
     model = FakeModel([tool_response(call), tool_response(call), tool_response(call)])

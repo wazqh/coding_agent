@@ -11,20 +11,16 @@ from platformdirs import user_data_path
 from rich.console import Console
 from rich.prompt import Prompt
 from rich.table import Table
+from rich.text import Text
 
 from coding_agent import __version__
 from coding_agent.branding import COMMAND_NAME, PRODUCT_NAME
-from coding_agent.config import ConfigError, load_settings
+from coding_agent.config import ConfigError
 from coding_agent.controller import AgentController
-from coding_agent.memory import MemoryStore
-from coding_agent.model_catalog import ModelCatalog, ModelSelectionStore
-from coding_agent.model_client import Compatibility, ModelClient
-from coding_agent.model_runtime import ModelManager
-from coding_agent.project import TrustManager, load_agents_instructions
-from coding_agent.safety.approval import ApprovalDecision, ApprovalPolicy, ApprovalRequest
+from coding_agent.project import TrustManager
+from coding_agent.runtime import RuntimeFactory
+from coding_agent.safety.approval import ApprovalDecision, ApprovalRequest
 from coding_agent.session import SessionError, SessionStore
-from coding_agent.skills import SkillRegistry
-from coding_agent.tools.registry import default_registry
 from coding_agent.ui.prompt import ControllerFactory, InteractiveShell
 from coding_agent.ui.render import JsonlRenderer, RichRenderer
 from coding_agent.workspace_settings import WorkspaceSettingsStore
@@ -135,105 +131,29 @@ def _build_runtime(
         trust_project=trust_project,
         console=console,
     )
-    overlay = {"model": {"name": model_name}} if model_name else None
-    settings = load_settings(
-        workspace,
-        trusted_project=trusted,
-        cli=overlay,
-        data_dir=data_dir,
-    )
-    settings.agent.capture_configured_max_steps()
-    workspace_settings = WorkspaceSettingsStore(data_dir=data_dir, workspace=workspace)
-    max_steps_override = workspace_settings.load().max_steps
-    if max_steps_override is not None:
-        settings.agent.max_steps = max_steps_override
-    catalog = ModelCatalog(path=data_dir / "models.toml", environ=os.environ)
-    model_state = ModelSelectionStore(data_dir=data_dir)
-    active_model = model_state.load()
-    provider = "legacy"
-    compatibility: Compatibility = (
-        "gemini"
-        if settings.model.base_url
-        and "generativelanguage.googleapis.com" in settings.model.base_url
-        else "openai"
-    )
-    if catalog.providers():
-        provider = (
-            active_model.provider
-            if active_model is not None and active_model.provider in catalog.providers()
-            else catalog.default_provider or ""
-        )
-        selected_name = model_name
-        if selected_name is None and active_model is not None and active_model.provider == provider:
-            selected_name = active_model.model
-        selected = catalog.resolve(provider, selected_name)
-        settings.model.name = selected.model
-        settings.model.base_url = selected.base_url
-        settings.model.api_key = selected.api_key
-        compatibility = selected.compatibility
-    if not settings.model.api_key:
-        raise ConfigError("OPENAI_API_KEY is not set")
     if output not in {"rich", "jsonl"}:
         raise ConfigError("--output must be rich or jsonl")
-    if permissions not in {"prompt", "auto", "read-only"}:
-        raise ConfigError("--permissions must be prompt, auto, or read-only")
-    renderer: RichRenderer | JsonlRenderer
-    if output == "jsonl":
-        renderer = JsonlRenderer(console)
-    else:
-        renderer = RichRenderer(console=console, raw=settings.ui.raw_tool_output)
-    model = ModelClient(
-        model=settings.model.name,
-        api_key=settings.model.api_key,
-        base_url=settings.model.base_url,
-        max_retries=settings.model.max_retries,
-        compatibility=compatibility,
+    renderer: RichRenderer | JsonlRenderer = (
+        JsonlRenderer(console) if output == "jsonl" else RichRenderer(console=console)
     )
-    model_manager = ModelManager(
-        client=model,
-        settings=settings,
-        catalog=catalog,
-        state=model_state,
-        provider=provider,
+    runtime = RuntimeFactory(
+        workspace=workspace,
+        data_dir=data_dir,
+        permissions=permissions,
+        trusted_project=trusted,
+        interactive=interactive,
+        model_name=model_name,
+        event_sink=renderer.handle,
+        approval_callback=(
+            _approval_callback(console, renderer if isinstance(renderer, RichRenderer) else None)
+            if interactive
+            else None
+        ),
     )
-    sessions = SessionStore(settings.data_dir)
-    instructions = load_agents_instructions(settings.cwd) if trusted else ""
-
-    def factory(resume_id: str | None) -> AgentController:
-        approval = ApprovalPolicy(
-            permissions,
-            interactive=interactive,
-            callback=(
-                _approval_callback(
-                    console, renderer if isinstance(renderer, RichRenderer) else None
-                )
-                if interactive
-                else None
-            ),
-        )
-        memory = MemoryStore(
-            data_dir=settings.data_dir,
-            workspace=settings.cwd,
-            enabled=settings.memory.enabled,
-        )
-        skills = SkillRegistry(workspace=settings.cwd)
-        skills.discover(include_repo=trusted)
-        return AgentController(
-            settings=settings,
-            model=model,
-            tools=default_registry(),
-            sessions=sessions,
-            memory=memory,
-            skills=skills,
-            approval=approval,
-            agents_instructions=instructions,
-            session_id=resume_id,
-            event_sink=renderer.handle,
-            model_manager=model_manager,
-        )
-
-    controller = factory(session_id)
-    return controller, renderer, factory
+    if isinstance(renderer, RichRenderer):
+        renderer.raw = runtime.settings.ui.raw_tool_output
+    controller = runtime.create(session_id)
+    return controller, renderer, runtime.controller_factory()
 
 
 def _report_cli_error(message: str, output: str = "rich") -> None:
@@ -241,7 +161,15 @@ def _report_cli_error(message: str, output: str = "rich") -> None:
     if output == "jsonl":
         console.print(json.dumps({"type": "error", "message": message}, ensure_ascii=False))
     else:
-        console.print(f"[red]error:[/] {message}")
+        line = Text("error: ", style="red")
+        line.append(message)
+        console.print(line)
+
+
+def _load_web_launcher() -> Callable[..., int]:
+    from coding_agent.web.launcher import launch_web
+
+    return launch_web
 
 
 @app.callback()
@@ -326,6 +254,70 @@ def run_command(
         raise typer.Exit(result.exit_code)
     except (ConfigError, SessionError, OSError, ValueError) as exc:
         _report_cli_error(str(exc), output)
+        raise typer.Exit(2) from exc
+
+
+@app.command("web")
+def web_command(
+    cwd: Annotated[Path, typer.Option("--cwd", help="Workspace directory.")] = Path("."),
+    model: Annotated[str | None, typer.Option("--model")] = None,
+    permissions: Annotated[str, typer.Option("--permissions")] = "prompt",
+    trust_project: Annotated[bool, typer.Option("--trust-project")] = False,
+    no_open: Annotated[
+        bool, typer.Option("--no-open", help="Do not open the browser automatically.")
+    ] = False,
+    desktop_handshake: Annotated[
+        bool,
+        typer.Option("--desktop-handshake", hidden=True),
+    ] = False,
+    desktop_trust: Annotated[
+        str | None,
+        typer.Option("--desktop-trust", hidden=True),
+    ] = None,
+) -> None:
+    try:
+        workspace = cwd.expanduser().resolve()
+        data_dir = _data_dir()
+        if desktop_handshake:
+            if desktop_trust not in {None, "once", "always", "ignore"}:
+                raise ValueError("Invalid desktop project trust choice")
+            manager = TrustManager(data_dir)
+            status = manager.status(workspace)
+            if desktop_trust is None and status.has_resources and not status.trusted:
+                payload = json.dumps(
+                    {"workspace": str(workspace)},
+                    ensure_ascii=True,
+                    separators=(",", ":"),
+                )
+                typer.echo(f"FORGE_DESKTOP_TRUST_REQUIRED {payload}")
+                raise typer.Exit(3)
+            if desktop_trust == "always":
+                manager.trust_always(workspace)
+            trust_project = desktop_trust in {"once", "always"}
+        try:
+            launcher = _load_web_launcher()
+        except ModuleNotFoundError as exc:
+            _report_cli_error('Web UI dependencies are not installed; run pip install -e ".[web]"')
+            raise typer.Exit(2) from exc
+        trusted = _resolve_trust(
+            workspace,
+            data_dir,
+            interactive=not desktop_handshake,
+            trust_project=trust_project,
+            console=Console(no_color=bool(os.environ.get("NO_COLOR"))),
+        )
+        exit_code = launcher(
+            workspace=workspace,
+            data_dir=data_dir,
+            model_name=model,
+            permissions=permissions,
+            trusted_project=trusted,
+            open_browser=not no_open,
+            desktop_handshake=typer.echo if desktop_handshake else None,
+        )
+        raise typer.Exit(exit_code)
+    except (ConfigError, SessionError, OSError, ValueError) as exc:
+        _report_cli_error(str(exc))
         raise typer.Exit(2) from exc
 
 

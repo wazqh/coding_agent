@@ -80,6 +80,26 @@ def test_project_trust_choices(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) 
     )
 
 
+def test_desktop_web_reports_untrusted_project_resources_without_prompting(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    workspace = tmp_path / "repo"
+    workspace.mkdir()
+    (workspace / "AGENTS.md").write_text("Follow tests.\n", encoding="utf-8")
+    monkeypatch.setenv("CODING_AGENT_DATA_DIR", str(tmp_path / "data"))
+    monkeypatch.setattr(cli, "_load_web_launcher", lambda: pytest.fail("launcher ran"))
+
+    result = CliRunner().invoke(
+        cli.app,
+        ["web", "--cwd", str(workspace), "--no-open", "--desktop-handshake"],
+    )
+
+    assert result.exit_code == 3
+    assert result.output.startswith("FORGE_DESKTOP_TRUST_REQUIRED ")
+    assert "Trust project resources?" not in result.output
+
+
 @pytest.mark.parametrize(
     ("choice", "expected"),
     [

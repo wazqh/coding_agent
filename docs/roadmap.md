@@ -1,8 +1,7 @@
 # Delivery status and roadmap
 
-This file records the state of the implementation after the current interactive-session and
-provider-compatibility module. It separates implemented behavior from work that still needs fresh
-verification or product decisions.
+This file records the state of the implementation after the local Web frontend delivery. It
+separates implemented behavior from work that still needs fresh verification or product decisions.
 
 ## Implemented now
 
@@ -20,6 +19,11 @@ verification or product decisions.
   deterministic compaction, and request-only repair of interrupted provider histories.
 - OpenAI-compatible streaming plus Gemini function-call compatibility, including durable thought
   signatures and complete-request token estimates that include tool schemas.
+- Optional localhost React Web UI using the shared controller/runtime, authenticated single-client
+  WebSocket, semantic event presenter, responsive session rail, compact timeline, inline approvals,
+  safe file preview, and read-only Diff inspection.
+- Bundled Noto Sans SC and JetBrains Mono, wheel-contained hashed production assets, Vitest coverage,
+  and a mocked Playwright demo path at both 1024×700 and 1920×1080.
 
 ## Required follow-up
 
@@ -31,9 +35,10 @@ verification or product decisions.
    record pass rate, tool success, correction count, tokens, latency, memory pollution, unexpected
    skill activation, and safety leakage. Do not commit generated reports.
 3. Perform a clean-clone wheel installation and manual 80-column, `NO_COLOR`, approval, cancellation,
-   resume, compact, memory, and skill acceptance pass.
-4. Record the two-minute demonstration from the exact release candidate, complete documentation QA,
-   and create the release tag only after CI and acceptance evidence are green.
+   resume, compact, memory, and skill acceptance pass; repeat the real Web flow on the release
+   candidate with a configured compatible provider.
+4. Record the two-minute Web demonstration from the exact release candidate, complete documentation
+   QA, and create the release tag only after CI and acceptance evidence are green.
 
 ## Optional product work
 
@@ -43,10 +48,14 @@ verification or product decisions.
 - Keep this control model-agnostic and degrade to a configurable static default when an endpoint has
   no reasoning control. Never request, persist, or render private chain-of-thought; the feature
   controls reasoning effort, not disclosure of hidden reasoning.
-- Consider richer session filtering, diff navigation for large changes, and measured TUI theme
-  variants only after the required acceptance work above.
+- Consider richer session filtering, aggregated per-file change history, diff navigation for large
+  changes, settings panels, and measured TUI theme variants only after required acceptance work.
+- Harden cancellation event ordering and Windows junction/symlink-swap preview races after the
+  current bounded read-only preview path has shipped.
 
 ## Explicitly out of scope for 1.0
 
-Web UI, plugin marketplace, MCP, multi-agent orchestration, RAG, hosted execution, and remote file
-services remain excluded unless the product scope is deliberately revised.
+Plugin marketplace, MCP, multi-agent orchestration, RAG, hosted execution, remote file services, a
+browser code editor, and a packaged desktop shell remain excluded unless product scope is
+deliberately revised. A future Tauri/WebView wrapper may reuse the React renderer without moving
+controller or filesystem authority into JavaScript.

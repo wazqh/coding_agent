@@ -1,18 +1,45 @@
 # Architecture
 
-Forge separates terminal interaction, orchestration, model transport, local tools, safety policy,
-context, persistence, project memory, and skills. All user-visible front ends consume the same
-`AgentEvent` stream, so Rich, JSONL, tests, and evaluations observe the same behavior.
+Forge separates terminal and browser interaction, orchestration, model transport, local tools,
+safety policy, context, persistence, project memory, and skills. All user-visible front ends consume
+the same `AgentEvent` stream, so TUI, Web, Rich, JSONL, tests, and evaluations observe the same
+behavior.
 
 ```text
-CLI / prompt_toolkit / Rich
-             |
-      AgentController
-       /     |      \
-ModelClient  ToolRegistry  ContextManager
-                |          /      |       \
-          Safety policy  Session  Memory  Skills
+CLI / prompt_toolkit / Rich       React Web renderer
+             |                           |
+             |                 typed loopback gateway
+             |                    semantic presenter
+             |                           |
+             +------ RuntimeFactory -----+
+                         |
+                  AgentController
+                   /     |      \
+            ModelClient  ToolRegistry  ContextManager
+                            |          /      |       \
+                      Safety policy  Session  Memory  Skills
 ```
+
+## Local Web boundary
+
+`coding-agent web` lazily imports FastAPI/Uvicorn, binds only to `127.0.0.1` on an OS-assigned port,
+and serves bundled versioned React assets. A single-use fragment capability is exchanged for an
+HttpOnly SameSite=Strict cookie after exact Host and Origin validation. One authenticated WebSocket
+becomes the controlling client; disconnecting cancels active work and denies pending approvals.
+
+The browser receives a closed, versioned semantic protocol: snapshots, final/streamed messages,
+grouped activity, plans, approval requests/results, context usage, bounded file previews, recorded
+diffs, completion, and recoverable errors. It cannot invoke arbitrary tools, read absolute paths, or
+submit shell commands outside an approval request created by the controller. File preview resolves
+through `WorkspacePaths`, rejects traversal and workspace escapes, and is limited to valid UTF-8
+text no larger than 2 MiB. Historical restore uses final user/assistant messages while ignoring
+historical text deltas, so answers are not duplicated.
+
+The React layer is transport-independent: Zustand projects semantic events into a compact timeline,
+while the WebSocket transport validates every inbound frame before mutation. Noto Sans SC and
+JetBrains Mono are bundled locally; Markdown disables raw HTML and remote resource loading. The
+responsive layout uses a session rail, fluid conversation column, contextual inspector, and fixed
+composer, with overlay behavior at narrow widths.
 
 ## Turn lifecycle
 

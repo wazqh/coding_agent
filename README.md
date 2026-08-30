@@ -1,9 +1,9 @@
 # Forge Coding Agent
 
-Forge is an original Python 3.11+ command-line coding agent. It combines a scrolling professional
-terminal UI with a locally controlled model-tool-observation loop, resumable sessions, approved
-project memory, lazy `SKILL.md` workflows, and strict workspace safety. It does not use an agent
-framework, hosted code execution, or a remote file service.
+Forge is an original Python 3.11+ local coding agent. It combines a scrolling professional terminal
+UI and an optional localhost Web UI with a locally controlled model-tool-observation loop, resumable
+sessions, approved project memory, lazy `SKILL.md` workflows, and strict workspace safety. It does
+not use an agent framework, hosted code execution, or a remote file service.
 
 ## Install and start
 
@@ -25,6 +25,28 @@ coding-agent --cwd .
 `OPENAI_BASE_URL` and `CODING_AGENT_MODEL` are optional. API keys are not accepted as CLI
 arguments, project configuration, or saved memory. On Windows, `python -m coding_agent` works even
 when the user-level Python Scripts directory is not on `PATH`.
+
+### Local Web UI
+
+Install the optional Web dependencies, then start the graphical frontend from the workspace you
+want Forge to control:
+
+```text
+python -m pip install -e ".[web]"
+coding-agent web --cwd .
+python -m coding_agent web --cwd .
+```
+
+Forge binds an operating-system-selected port on `127.0.0.1` and opens the browser automatically.
+Use `--no-open` to print the one-time launch URL without opening it. The Web UI provides a responsive
+session rail, compact Agent timeline, inline three-way approvals, completed Markdown output, and a
+read-only changes/Diff/file inspector. It uses the same `AgentController`, session store, local tools,
+approval policy, workspace confinement, Memory, and Skills as the TUI; it does not start a CLI child
+process or expose a general shell/file HTTP API.
+
+The launch capability is exchanged once for an HttpOnly, SameSite=Strict cookie. Host and Origin are
+restricted to the exact loopback listener, only one controlling WebSocket is accepted, and API keys
+remain in the Python runtime environment. Remote images are not loaded by Markdown rendering.
 
 ### Multiple OpenAI-compatible providers
 
@@ -84,6 +106,7 @@ coding-agent [--cwd PATH]
 coding-agent run "TASK" [--cwd PATH] [--output rich|jsonl]
 coding-agent resume SESSION_ID [--cwd PATH]
 coding-agent sessions [--output table|json]
+coding-agent web [--cwd PATH] [--no-open]
 ```
 
 The interactive UI keeps normal terminal scrollback. Enter submits, Ctrl+J or Alt+Enter inserts a
@@ -176,7 +199,7 @@ scripts never execute automatically.
 ## Development and verification
 
 ```text
-python -m pip install -e ".[dev]"
+python -m pip install -e ".[dev,web]"
 python -m ruff check .
 python -m ruff format --check .
 python -m mypy
@@ -185,6 +208,13 @@ python -m pytest -q --cov=coding_agent --cov-branch \
 python scripts/check_coverage.py coverage.json
 python evals/run_eval.py --dry-run
 python -m build
+
+cd web
+npm ci
+npm test
+npm run build
+npx playwright install chromium
+npm run test:e2e
 ```
 
 On Windows, if `python -m build` fails while installing the isolated Hatchling environment and the
@@ -199,9 +229,11 @@ python -m build --no-isolation
 This workaround does not replace the clean isolated build in CI; it separates a local pip/output
 decoding failure from a package metadata or backend failure.
 
-CI runs Ruff, strict mypy, branch coverage, high-risk coverage gates, Bandit, dependency and secret
-audits, wheel installation, and CLI smoke tests on Ubuntu and Windows with Python 3.11 and 3.12. It
-does not receive an API key or call a real model.
+CI runs Ruff, strict mypy, branch coverage, and high-risk coverage gates on Ubuntu and Windows with
+Python 3.11 and 3.12. Security audits plus wheel installation and CLI smoke tests run on Ubuntu with
+Python 3.12. Frontend CI runs TypeScript/Vite, checks that committed production assets match their
+source, and executes Vitest plus the Playwright demo path at 1024×700 and 1920×1080 on Windows and
+Linux. It does not receive an API key or call a real model.
 
 The real-model harness contains five isolated tasks and repeats each three times. It measures task
 pass rate, tool success, self-correction, tokens, latency, memory pollution, unexpected skill

@@ -26,13 +26,17 @@ class UpdatePlanArgs(BaseModel):
 
 class UpdatePlanTool(Tool):
     name = "update_plan"
-    description = "Create or update the visible task plan. Keep at most one step in progress."
+    description = (
+        "Create or update the visible task plan. Keep at most one step in progress. "
+        "Update it after meaningful phases and again before the final response."
+    )
     args_model = UpdatePlanArgs
 
     def execute(self, args: BaseModel, context: ToolContext) -> ToolResult:
         values = UpdatePlanArgs.model_validate(args)
         plan = [item.model_dump() for item in values.plan]
         context.working.plan = plan
+        context.working.plan_turn_id = context.turn_id
         context.emit(EventKind.PLAN, {"plan": plan, "explanation": values.explanation})
         return ToolResult(
             ok=True,

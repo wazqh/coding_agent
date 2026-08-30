@@ -17,6 +17,7 @@ if TYPE_CHECKING:
 class WorkingState(BaseModel):
     goal: str = ""
     plan: list[dict[str, str]] = Field(default_factory=list)
+    plan_turn_id: str | None = Field(default=None, exclude=True)
     recent_calls: list[dict[str, Any]] = Field(default_factory=list)
     modified_files: dict[str, str] = Field(default_factory=dict)
     active_skills: list[str] = Field(default_factory=list)

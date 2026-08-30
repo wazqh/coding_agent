@@ -189,6 +189,12 @@ class AgentController:
                 "correct the plan or arguments. Do not reveal hidden chain-of-thought; communicate "
                 "only concise plans, actions, results, and relevant rationale."
             ),
+            (
+                "Whenever you create or update the visible plan with update_plan, update it after "
+                "each meaningful phase. Before your final response, call update_plan again so "
+                "completed work is marked completed and remaining work stays accurately pending. "
+                "Never mark unfinished work complete."
+            ),
             f"Workspace boundary: {self.settings.cwd}",
         ]
         if self.agents_instructions:
@@ -637,6 +643,20 @@ class AgentController:
         exit_code: int | None = None,
     ) -> RunResult:
         code = exit_code if exit_code is not None else (0 if status is AgentState.COMPLETED else 1)
+        if status is AgentState.COMPLETED and self.working.plan_turn_id == turn_id:
+            completed = sum(item.get("status") == "completed" for item in self.working.plan)
+            total = len(self.working.plan)
+            if completed < total:
+                self._emit(
+                    EventKind.WARNING,
+                    turn_id=turn_id,
+                    data={
+                        "code": "PLAN_INCOMPLETE",
+                        "message": f"计划未闭环: 已完成 {completed}/{total} 步。",
+                        "completed": completed,
+                        "total": total,
+                    },
+                )
         self._set_state(status, turn_id, reason=reason, tool_steps=steps)
         self._emit(
             EventKind.DONE,
