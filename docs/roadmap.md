@@ -21,7 +21,11 @@ browser product.
 - React desktop workspace with project-organized sessions, collapsible navigation, activity and plan
   timelines, streaming Markdown, inline approval/Diff review, task inspector, bounded file preview,
   `/`/`@`/`$` completion, session controls, Skills, Memory, context, permissions, steps, and provider
-  onboarding.
+  onboarding. Startup restores the latest meaningful workspace session, session deletion removes
+  only its evidenced Memory, and recorded file changes support conflict-safe per-change Undo.
+- Human-readable expandable tool details, created/modified/deleted file accounting, rendered
+  approval and inspector Diffs, and responsive 1024/1920 layouts with a full-height inspector and
+  one composer focus treatment.
 - Bundled Noto Sans SC and JetBrains Mono, hashed wheel-contained renderer assets, Python/Vitest
   regression coverage, and a mocked renderer acceptance path at 1024×700 and 1920×1080 on Windows
   and Linux.

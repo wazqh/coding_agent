@@ -44,18 +44,21 @@ internal desktop boundary, not a remote service or a transfer of filesystem auth
 
 The browser receives a closed, versioned semantic protocol: snapshots, final/streamed messages,
 grouped activity, plans, approval requests/results, context usage, bounded file previews, recorded
-diffs, completion, and recoverable errors. It cannot invoke arbitrary tools, read absolute paths, or
-submit shell commands outside an approval request created by the controller. File preview resolves
-through `WorkspacePaths`, rejects traversal and workspace escapes, and is limited to valid UTF-8
-text no larger than 2 MiB. Historical restore uses final user/assistant messages while ignoring
-historical text deltas, so answers are not duplicated.
+diffs, exact change Undo, session deletion, completion, and recoverable errors. It cannot invoke
+arbitrary tools, read absolute paths, or submit shell commands outside an approval request created
+by the controller. File preview resolves through `WorkspacePaths`, rejects traversal and workspace
+escapes, and is limited to valid UTF-8 text no larger than 2 MiB. Historical restore uses final
+user/assistant messages while ignoring historical text deltas, so answers are not duplicated.
+Initialization restores the most recent meaningful session for the active workspace, falling back
+to its latest blank session; it creates a Session only when the workspace has none.
 
 The React layer is transport-independent: Zustand projects semantic events into a project/session
 tree, readable activity timeline, plan, approvals, final output, and task inspector, while the
 WebSocket transport validates every inbound frame before mutation. Noto Sans SC and JetBrains Mono
 are bundled locally; Markdown disables raw HTML and remote resource loading. The responsive layout
 uses a collapsible session rail, fluid conversation column, contextual inspector, and anchored
-composer, with overlay behavior at narrow widths.
+composer, with overlay behavior at narrow widths. Routine tool payloads are converted to labeled
+fields and concise summaries rather than exposed as raw JSON.
 
 ## Turn lifecycle
 
@@ -72,12 +75,18 @@ terminates the complete command process tree before the cancelled turn is persis
 
 ## Persistence controls
 
-- Working state exists only in the current process and contains the goal, plan, recent calls, diffs,
-  approvals, and active skills.
+- Working state exists only in the current process and contains the goal, plan, recent calls,
+  immutable applied-change records, approvals, and active skills. Each change records its kind,
+  workspace-relative path, before/after hashes and contents, rendered Diff, and reversibility.
 - Session JSONL stores messages, tool observations, events, usage, compaction points, and termination.
 - Approved project memory is stored separately, is disabled by default, filtered for secrets, and
   keyed by normalized repository root plus Git remote.
 - `AGENTS.md` is repository-owned policy. Skills are reusable procedures. Neither is memory.
+
+Desktop Undo applies the selected recorded change in reverse only when the current file still
+matches the recorded after-state. Later edits cause a recoverable conflict instead of an unsafe
+overwrite. Deleting a Session removes only Memory records whose evidence identifies that Session;
+failure in either store rolls the operation back.
 
 At 70% of the complete request size (messages plus tool schemas), deterministic compaction runs
 before a new user turn rather than inside an active tool chain. It preserves the goal, constraints,

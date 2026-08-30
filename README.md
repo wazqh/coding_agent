@@ -45,16 +45,20 @@ launch, `& .\node_modules\.bin\electron.cmd . --cwd "D:\path\to\project"` remain
 takes precedence over `FORGE_WORKSPACE`. `FORGE_PYTHON` may select the Python executable used for
 the local runtime. The desktop provides project-organized sessions, a visible
 Agent activity timeline and plan, inline three-way approvals, Markdown output, `/`/`@`/`$`
-completion, model/provider onboarding, runtime controls, and a read-only changes/Diff/file
-inspector. It uses the same `AgentController`, session store, local tools, approval policy,
-workspace confinement, Memory, and Skills as the TUI.
+completion, model/provider onboarding, runtime controls, and a changes/Diff/file inspector with
+conflict-safe per-change Undo. It resumes the most recent meaningful session for the selected
+workspace on launch instead of creating an empty conversation; **New conversation** is the explicit
+way to start a clean session. Sessions can be deleted in place, together with only the Memory facts
+that carry evidence from that session. The desktop uses the same `AgentController`, session store,
+local tools, approval policy, workspace confinement, Memory, and Skills as the TUI.
 
 Electron supervises a private loopback Python gateway; it does not run the CLI as a child or move
 model/tool authority into JavaScript. A one-time capability is exchanged for an HttpOnly,
 SameSite=Strict cookie, Host and Origin are restricted to the exact loopback listener, and only one
 controlling WebSocket is accepted. Provider keys use the desktop credential bridge and never enter
 renderer state, WebSocket frames, sessions, Memory, or `models.toml`. Remote Markdown resources are
-not loaded.
+not loaded. Tool details are presented as labeled, human-readable fields; the normal interface does
+not expose raw JSON payloads.
 
 ### Multiple OpenAI-compatible providers
 
@@ -145,7 +149,7 @@ Interactive management commands are:
 | `/skills ...` | List, search, enable, disable, or reload discovered skills. |
 | `/compact` | Compact eligible older context without deleting the JSONL transcript. |
 | `/resume [SESSION_ID]` / `/new` | Pick a recent workspace session or switch by ID; create a clean session. |
-| `/raw [on|off]` | Inspect or set full tool-result rendering. |
+| `/raw [on|off]` | Inspect or set complete, labeled tool details (never a raw JSON dump). |
 | `/clear` / `/exit` | Clear terminal output, or save the session and exit. |
 
 Run `/help COMMAND` inside the TUI for usage, scope, and side-effect details. Administrative
@@ -198,6 +202,12 @@ session rebuilds its effective model context from the latest compaction snapshot
 messages, while the TUI previews the last three user/assistant turns without replaying tool output.
 Before a request is sent, interrupted histories are normalized in memory for strict compatible
 providers; the durable JSONL transcript is not rewritten.
+
+On desktop startup, Forge selects the most recently updated session for the current workspace that
+contains a user task. If the workspace contains only blank sessions, it reuses the newest blank
+session; a new Session is created only when none exists or the user explicitly requests one.
+Historical final messages and structured events are restored without replaying side effects or
+historical text deltas.
 
 Project memory is off by default. `/memory remember TEXT` stores an explicitly approved fact for the
 same repository only; secret-like values and large code blocks are rejected. At most eight relevant

@@ -3,8 +3,8 @@
 ## Status
 
 Implemented and integrated on 2026-08-30. Electron is now the primary graphical frontend and the
-TUI remains supported. References below to a comparison branch, separate worktree, or Web V1 record
-the implementation phase and are not current launch instructions; use the repository README.
+TUI remains supported. This document records the accepted architecture and current desktop
+behavior; use the repository README for launch instructions.
 
 ## Goal
 
@@ -13,7 +13,7 @@ existing Python `AgentController`, local tools, approvals, sessions, Memory, Ski
 workspace settings, and safety boundaries. Every user-facing capability currently available in the
 interactive TUI must have an equivalent desktop interaction before V2 is considered complete.
 
-The comparison build is a development delivery, not an installer:
+The source build is a development delivery, not an installer:
 
 ```powershell
 npm ci
@@ -32,8 +32,8 @@ deferred until the interaction design is accepted.
 - React renderer is untrusted. It receives semantic view data and sends a closed set of typed
   requests. It never receives credentials, unrestricted filesystem access, a shell, or arbitrary
   environment values.
-- The V1 Web branch remains unchanged and launchable. V2 lives on `feat/electron-ui-v2` so both
-  versions can be compared with identical Agent behavior.
+- The React gateway is bundled as Electron infrastructure on the main delivery branch; it is not
+  promoted as a separate hosted browser product.
 - Multi-agent, embedded editor, terminal emulator, Git push/PR, automatic undo, and hidden
   chain-of-thought are not introduced.
 
@@ -131,14 +131,16 @@ Slash commands remain available in the composer as keyboard shortcuts to the sam
 | `/resume [SESSION_ID]` | Recent session list, search, resume, and copy Session ID |
 | `/new` | New conversation action that resets plan, approvals, and activated skills |
 | `/clear` | Clear only the current rendered timeline after confirmation; persisted history remains |
-| `/raw on\|off` | Toggle structured raw tool results in expandable activity details |
+| `/raw on\|off` | Toggle complete labeled tool details in expandable activity cards; never dump raw JSON |
 | `/exit` and Ctrl+D | Desktop close flow with session handoff information |
 | `$skill` completion | Anchored, keyboard-accessible skill completion |
 | `@file` completion | Workspace-confined file completion with bounded results |
 | Slash completion | Full-width command palette with argument-aware provider/model/steps completion |
 | Tool streaming and audit | Compact activity groups plus expandable name, arguments, approval, result, duration, and error |
 | Inline approval | Allow once, allow matching actions for session, or deny |
-| Session restoration | Durable final messages and structured events; historical side effects never replay |
+| Session restoration | Restore the latest meaningful workspace session at startup; durable final messages and structured events never replay historical side effects |
+| Session deletion | In-place confirmation; remove only Memory records evidenced by the deleted Session |
+| Change Undo | Reverse one recorded applied change only when its after-state still matches |
 
 TUI-only presentation mechanics such as terminal `NO_COLOR`, external terminal editor invocation,
 and ordinary terminal scrollback do not map literally. Their product outcomes map to accessible
@@ -242,9 +244,10 @@ structured records, ignores historical deltas, repairs incomplete tool calls as 
 never replays side effects. Gemini thought signatures remain attached to
 `extra_content.google.thought_signature` through persistence and compaction.
 
-Changed-file review remains read-only. It displays normalized paths, status, cumulative additions
-and deletions, applied diffs, and bounded before/after information available from existing change
-records. Undo is not claimed until a durable conflict-safe reverse-diff workflow exists.
+Changed-file review displays normalized paths, change kind, additions and deletions, applied Diffs,
+and a bounded light file preview. New, modified, and deleted files use immutable applied-change
+records. Undo reverses the selected record only while the workspace file matches its recorded
+after-state; conflicts fail closed and leave later work untouched.
 
 All preview and completion paths pass through `WorkspacePaths`. Absolute paths, traversal, escaping
 links/junctions, binaries, and text larger than 2 MiB are rejected. Renderer requests cannot execute
@@ -263,7 +266,7 @@ never returned to Electron.
 - Protocol mismatch: fail closed with a rebuild/restart instruction.
 - Workspace switch failure: keep the existing workspace and conversation active.
 
-## Testing and comparison
+## Testing and validation
 
 ### Automated
 
@@ -275,7 +278,7 @@ never returned to Electron.
   policy, workspace switching, and child cleanup.
 - Playwright Electron tests at 1024x700 and 1920x1080 covering launch, new/resume session, send,
   streaming, completion, stop, approval decisions, management actions, diff inspection, and close.
-- Existing Python and V1-compatible tests remain green. Ruff, Ruff format, strict mypy, TypeScript,
+- Existing Python and gateway-compatible tests remain green. Ruff, Ruff format, strict mypy, TypeScript,
   Vitest, Playwright, and production builds are required before handoff.
 
 ### Real-model validation
@@ -290,19 +293,19 @@ resume, and context inspection. Artifacts remain ignored for manual review.
 No test output records secrets or raw environment values. A mock E2E run is reported as mock; it
 never substitutes for a failed or unavailable real-model run.
 
-### Visual comparison delivery
+### Visual delivery
 
 The handoff includes:
 
-- independent V1 Web and V2 Electron launch commands,
-- matching 1024x700 and 1920x1080 screenshots using the same semantic fixture,
+- reproducible Electron launch commands,
+- matching 1024x700 and 1920x1080 acceptance views using the same semantic fixture,
 - a short parity matrix identifying every TUI capability and its V2 location,
 - the real-model test record or an explicit unavailable/failure report,
-- no merge or push unless the user later authorizes it.
+- no merge or push without explicit user authorization.
 
 ## Exit criteria
 
-V2 is ready for user comparison only when:
+V2 is ready for release validation only when:
 
 1. All TUI capabilities in the parity table are implemented or explicitly marked inapplicable with
    an equivalent desktop outcome.
@@ -311,6 +314,5 @@ V2 is ready for user comparison only when:
 3. Final Agent output is always expanded; routine activities are concise but fully auditable.
 4. The UI remains coherent at 1024x700 and fills a 1920x1080 window without fixed-width gaps.
 5. Electron renderer has no generic filesystem, shell, environment, or credential authority.
-6. V1 remains untouched and launchable for direct comparison.
-7. Required automated checks pass and the validation evidence contains no secret material.
+6. Required automated checks pass and the validation evidence contains no secret material.
 
