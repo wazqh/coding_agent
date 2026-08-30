@@ -5,6 +5,7 @@ from pathlib import Path
 from fastapi.testclient import TestClient
 
 from coding_agent.branding import PRODUCT_NAME
+from coding_agent.memory import MemoryStore
 from coding_agent.session import SessionStore
 from coding_agent.web.app import _dispatch_request, create_web_app
 from coding_agent.web.auth import LaunchAuth
@@ -12,8 +13,10 @@ from coding_agent.web.coordinator import TurnCoordinator
 from coding_agent.web.protocol import (
     ChangesListRequest,
     FilePreviewRequest,
+    InitializeRequest,
     PermissionsSetRequest,
     RuntimeStatusRequest,
+    SessionDeleteRequest,
     SessionResumeRequest,
     StepsSetRequest,
     ViewEventType,
@@ -186,6 +189,65 @@ def test_dispatches_session_restore_preview_and_recorded_changes(tmp_path: Path)
     assert events[0].data["text"] == "answer = 42"
     assert events[1].type.value == "changes.updated"
     assert events[1].data["changes"][0]["path"] == "demo.py"
+
+
+def test_initialize_restores_recent_history_instead_of_creating_an_unnamed_session(
+    tmp_path: Path,
+) -> None:
+    sessions = SessionStore(tmp_path / "data")
+    session_id = sessions.create({"workspace": str(tmp_path)})
+    sessions.append_message(session_id, {"role": "user", "content": "resume on launch"})
+    coordinator = TurnCoordinator()
+    runtime = FakeRuntime(coordinator.handle_agent_event)
+    coordinator.attach_runtime(runtime)
+    coordinator.configure_workspace_services(workspace=tmp_path, sessions=sessions)
+
+    _dispatch_request(
+        coordinator,
+        InitializeRequest(type="initialize", request_id="initialize", last_seq=0),
+    )
+
+    events = coordinator.drain_events()
+    assert [event.type.value for event in events] == ["snapshot", "message.final"]
+    assert events[0].session_id == session_id
+    assert events[0].data["replace_timeline"] is True
+    assert runtime.created == [session_id]
+    assert [item["id"] for item in sessions.list()] == [session_id]
+
+
+def test_dispatches_session_delete_and_refreshes_memory(tmp_path: Path) -> None:
+    sessions = SessionStore(tmp_path / "data")
+    session_id = sessions.create({"workspace": str(tmp_path)})
+    memory = MemoryStore(data_dir=tmp_path / "data", workspace=tmp_path, enabled=True)
+    memory.remember(content="remove with session", session_id=session_id)
+    coordinator = TurnCoordinator()
+    runtime = FakeRuntime(coordinator.handle_agent_event)
+    coordinator.attach_runtime(runtime)
+    coordinator.configure_workspace_services(
+        workspace=tmp_path,
+        sessions=sessions,
+        memory=memory,
+    )
+    coordinator.resume_session(session_id)
+
+    _dispatch_request(
+        coordinator,
+        SessionDeleteRequest(
+            type="session.delete",
+            request_id="delete",
+            session_id=session_id,
+        ),
+    )
+
+    events = coordinator.drain_events()
+    assert [event.type.value for event in events] == [
+        "snapshot",
+        "memory.updated",
+        "command.completed",
+    ]
+    assert events[0].data["replace_timeline"] is True
+    assert events[1].data["memory"]["items"] == []
+    assert events[2].data["deleted_memory_count"] == 1
 
 
 def test_dispatches_runtime_status_and_management_mutations() -> None:

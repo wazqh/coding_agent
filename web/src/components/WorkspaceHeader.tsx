@@ -1,16 +1,14 @@
-import { InspectorIcon, MenuIcon } from "./icons";
+import { MenuIcon } from "./icons";
 
 interface WorkspaceHeaderProps {
   taskTitle: string;
   projectName: string;
-  onOpenInspector: () => void;
   onToggleRail: () => void;
 }
 
 export function WorkspaceHeader({
   taskTitle,
   projectName,
-  onOpenInspector,
   onToggleRail,
 }: WorkspaceHeaderProps) {
   const normalizedTitle = taskTitle.trim() || "新对话";
@@ -30,17 +28,6 @@ export function WorkspaceHeader({
       <div className="task-heading">
         <h1 title={normalizedTitle}>{compactTitle}</h1>
         <span>{projectName}</span>
-      </div>
-      <div className="header-actions">
-        <button
-          type="button"
-          className="quiet-action"
-          onClick={onOpenInspector}
-          aria-label="任务检查器"
-        >
-          <InspectorIcon />
-          任务检查器
-        </button>
       </div>
     </header>
   );

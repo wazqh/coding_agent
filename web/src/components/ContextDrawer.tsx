@@ -10,7 +10,6 @@ import type {
 } from "../state/store";
 import { ChangesSummary } from "./ChangesSummary";
 import { DiffViewer } from "./DiffViewer";
-import { FilePreview } from "./FilePreview";
 import { CloseIcon } from "./icons";
 import { ModelManager, type ModelSetupInput } from "./ModelManager";
 
@@ -21,6 +20,7 @@ interface ContextDrawerProps {
   changes: ChangeSummary[];
   filePreview: FilePreviewData | null;
   onPreview: (path: string) => void;
+  onUndoChange: (changeId: string) => void;
   busy: boolean;
   modelName: string;
   permissions: "prompt" | "auto" | "read-only";
@@ -40,8 +40,8 @@ interface ContextDrawerProps {
     input: ModelSetupInput,
   ) => Promise<{ persisted: boolean; backend: string }>;
   onPermissionChange: (mode: "prompt" | "auto" | "read-only") => void;
-  onStepsChange: (value: number) => void;
-  onStepsReset: () => void;
+  onStepsChange: (value: number) => boolean | void;
+  onStepsReset: () => boolean | void;
   onMemoryList: () => void;
   onMemoryToggle: (enabled: boolean) => void;
   onRemember: (content: string) => void;
@@ -85,14 +85,21 @@ export function ContextDrawer(props: ContextDrawerProps) {
     initialTab = "changes",
   } = props;
   const [selectedId, setSelectedId] = useState<string | null>(null);
+  const [previewPath, setPreviewPath] = useState<string | null>(null);
   const [tab, setTab] = useState<InspectorTab>(initialTab);
   const [resourceTab, setResourceTab] = useState<"skills" | "memory">("skills");
   const [skillQuery, setSkillQuery] = useState("");
   const [memoryDraft, setMemoryDraft] = useState("");
   const [clearArmed, setClearArmed] = useState(false);
   const [stepDraft, setStepDraft] = useState(String(runtime?.steps?.current ?? 24));
+  const [pendingStepAction, setPendingStepAction] = useState<
+    { kind: "set"; value: number } | { kind: "reset" } | null
+  >(null);
+  const [stepFeedback, setStepFeedback] = useState<
+    { state: "idle" | "saving" | "saved" | "error"; message: string }
+  >({ state: "idle", message: "" });
   const [modelManagerOpen, setModelManagerOpen] = useState(props.openModelManager ?? false);
-  const selected = changes.find((change) => change.id === selectedId) ?? changes[0];
+  const selected = changes.find((change) => change.id === selectedId);
 
   useEffect(() => {
     if (props.openModelManager) setModelManagerOpen(true);
@@ -111,6 +118,32 @@ export function ContextDrawer(props: ContextDrawerProps) {
   useEffect(() => {
     setStepDraft(String(runtime?.steps?.current ?? 24));
   }, [runtime?.steps?.current]);
+
+  useEffect(() => {
+    if (!pendingStepAction) return;
+    const confirmed = pendingStepAction.kind === "set"
+      ? runtime?.steps?.current === pendingStepAction.value
+      : runtime?.steps?.overridden === false;
+    if (!confirmed) return;
+    setPendingStepAction(null);
+    setStepFeedback({ state: "saved", message: "已保存，下一轮任务生效" });
+  }, [pendingStepAction, runtime?.steps?.current, runtime?.steps?.overridden]);
+
+  useEffect(() => {
+    if (!pendingStepAction) return;
+    const timer = window.setTimeout(() => {
+      setPendingStepAction(null);
+      setStepFeedback({ state: "error", message: "未收到运行时确认，请重试" });
+    }, 5000);
+    return () => window.clearTimeout(timer);
+  }, [pendingStepAction]);
+
+  useEffect(() => {
+    if (selectedId !== null && !changes.some((change) => change.id === selectedId)) {
+      setSelectedId(null);
+      setPreviewPath(null);
+    }
+  }, [changes, selectedId]);
 
   const skillItems = useMemo(() => {
     const items = skillsState?.items ?? [];
@@ -162,10 +195,30 @@ export function ContextDrawer(props: ContextDrawerProps) {
             <ChangesSummary
               changes={changes}
               selectedId={selected?.id}
-              onSelect={(change) => setSelectedId(change.id)}
+              onSelect={(change) => {
+                setSelectedId((current) => (current === change.id ? null : change.id));
+                setPreviewPath(null);
+              }}
             />
-            {selected ? <DiffViewer change={selected} onPreview={onPreview} /> : null}
-            {filePreview && filePreview.path === selected?.path ? <FilePreview file={filePreview} /> : null}
+            {selected ? (
+              <DiffViewer
+                change={selected}
+                onPreview={(path) => {
+                  if (previewPath === path) {
+                    setPreviewPath(null);
+                    return;
+                  }
+                  setPreviewPath(path);
+                  onPreview(path);
+                }}
+                onUndo={props.onUndoChange}
+                busy={busy}
+                previewOpen={previewPath === selected.path}
+                filePreview={
+                  filePreview && filePreview.path === selected.path ? filePreview : null
+                }
+              />
+            ) : null}
           </>
         ) : null}
 
@@ -184,7 +237,7 @@ export function ContextDrawer(props: ContextDrawerProps) {
                 <div><strong id="model-setting-title">模型</strong><small>OpenAI-compatible 服务商与模型</small></div>
                 <div className="settings-card-actions">
                   <button type="button" className="text-action" disabled={busy} onClick={props.onModelReload}>重新加载</button>
-                  <button type="button" className="primary-small" disabled={busy} onClick={() => setModelManagerOpen((value) => !value)}>
+                  <button type="button" className={modelManagerOpen ? "text-action" : "primary-small"} disabled={busy} onClick={() => setModelManagerOpen((value) => !value)}>
                     {modelManagerOpen ? "收起" : "添加服务商"}
                   </button>
                 </div>
@@ -245,16 +298,53 @@ export function ContextDrawer(props: ContextDrawerProps) {
                   max={stepMaximum}
                   value={stepDraft}
                   disabled={busy}
-                  onChange={(event) => setStepDraft(event.target.value)}
+                  onChange={(event) => {
+                    setStepDraft(event.target.value);
+                    if (stepFeedback.state !== "idle") {
+                      setStepFeedback({ state: "idle", message: "" });
+                    }
+                  }}
                 />
                 <button
                   type="button"
                   className="primary-small"
-                  disabled={busy || Number(stepDraft) < stepMinimum || Number(stepDraft) > stepMaximum}
-                  onClick={() => props.onStepsChange(Number(stepDraft))}
-                >保存</button>
-                <button type="button" className="text-action" disabled={busy} onClick={props.onStepsReset}>恢复默认</button>
+                  disabled={busy || pendingStepAction !== null || Number(stepDraft) < stepMinimum || Number(stepDraft) > stepMaximum}
+                  onClick={() => {
+                    const value = Number(stepDraft);
+                    const accepted = props.onStepsChange(value);
+                    if (accepted === false) {
+                      setStepFeedback({ state: "error", message: "运行时未连接，保存失败" });
+                      return;
+                    }
+                    setPendingStepAction({ kind: "set", value });
+                    setStepFeedback({ state: "saving", message: "正在保存…" });
+                  }}
+                >{pendingStepAction?.kind === "set" ? "保存中…" : "保存"}</button>
+                <button
+                  type="button"
+                  className="text-action"
+                  disabled={busy || pendingStepAction !== null}
+                  onClick={() => {
+                    const accepted = props.onStepsReset();
+                    if (accepted === false) {
+                      setStepFeedback({ state: "error", message: "运行时未连接，恢复失败" });
+                      return;
+                    }
+                    setPendingStepAction({ kind: "reset" });
+                    setStepFeedback({ state: "saving", message: "正在恢复默认值…" });
+                  }}
+                >{pendingStepAction?.kind === "reset" ? "恢复中…" : "恢复默认"}</button>
               </div>
+              {stepFeedback.state !== "idle" ? (
+                <div
+                  className={`setting-feedback is-${stepFeedback.state}`}
+                  role="status"
+                  aria-label="最大步骤保存状态"
+                >
+                  <span aria-hidden="true">{stepFeedback.state === "saved" ? "✓" : stepFeedback.state === "error" ? "!" : "·"}</span>
+                  {stepFeedback.message}
+                </div>
+              ) : null}
             </section>
           </div>
         ) : null}
@@ -332,7 +422,7 @@ export function ContextDrawer(props: ContextDrawerProps) {
               <div><dt>上下文窗口</dt><dd>{runtime?.context?.context_window?.toLocaleString() ?? 0} tokens</dd></div>
             </dl>
             <p className="inspector-note">估算包含系统指令、对话消息和工具定义。Compact 只压缩较早上下文，不删除本地 JSONL 会话记录。</p>
-            <button type="button" className="primary-wide" disabled={busy} onClick={props.onCompact}>Compact 较早上下文</button>
+            <button type="button" className="secondary-wide" disabled={busy} onClick={props.onCompact}>Compact 较早上下文</button>
           </div>
         ) : null}
       </div>

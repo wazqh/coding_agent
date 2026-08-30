@@ -120,6 +120,74 @@ test("keeps task input gated until the runtime snapshot arrives", async () => {
   expect(screen.getByRole("textbox", { name: "任务输入" })).toBeDisabled();
 });
 
+test("confirms a maximum-step update after the runtime snapshot applies it", async () => {
+  const user = userEvent.setup();
+  const transport = new FakeTransport();
+  render(<App {...baseProps} transport={transport} store={createAgentStore()} />);
+  await waitFor(() => expect(transport.connect).toHaveBeenCalledOnce());
+
+  act(() => {
+    transport.emit({
+      protocol_version: 2,
+      type: "snapshot",
+      seq: 1,
+      session_id: "a".repeat(24),
+      turn_id: null,
+      data: { busy: false, model: "gemini-flash", permissions: "prompt" },
+    });
+  });
+  await user.click(screen.getByRole("button", { name: "任务检查器" }));
+  await user.click(screen.getByRole("tab", { name: "运行" }));
+  act(() => {
+    transport.emit({
+      protocol_version: 2,
+      type: "runtime.updated",
+      seq: 2,
+      session_id: "a".repeat(24),
+      turn_id: null,
+      data: {
+        runtime: {
+          workspace_name: "coding_agent",
+          workspace: "D:\\codes\\coding_agent",
+          permissions: "prompt",
+          model: { id: "gemini-flash" },
+          context: { estimated_tokens: 0, context_window: 100000, percent_used: 0 },
+          steps: { current: 12, minimum: 12, maximum: 100, overridden: false },
+        },
+      },
+    });
+  });
+
+  const input = screen.getByRole("spinbutton", { name: "最大步骤" });
+  await user.clear(input);
+  await user.type(input, "40");
+  await user.click(screen.getByRole("button", { name: "保存" }));
+
+  expect(transport.request).toHaveBeenCalledWith("steps.set", { value: 40 });
+  expect(screen.getByRole("button", { name: "保存中…" })).toBeDisabled();
+  act(() => {
+    transport.emit({
+      protocol_version: 2,
+      type: "runtime.updated",
+      seq: 3,
+      session_id: "a".repeat(24),
+      turn_id: null,
+      data: {
+        runtime: {
+          workspace_name: "coding_agent",
+          workspace: "D:\\codes\\coding_agent",
+          permissions: "prompt",
+          model: { id: "gemini-flash" },
+          context: { estimated_tokens: 0, context_window: 100000, percent_used: 0 },
+          steps: { current: 40, minimum: 12, maximum: 100, overridden: true },
+        },
+      },
+    });
+  });
+  expect(await screen.findByRole("status", { name: "最大步骤保存状态" }))
+    .toHaveTextContent("已保存，下一轮任务生效");
+});
+
 test("disables input after disconnect and offers reconnection", async () => {
   const user = userEvent.setup();
   const transport = new FakeTransport();
@@ -176,10 +244,16 @@ test("creates or resumes sessions and requests changes for the contextual drawer
 
   await user.click(screen.getByRole("button", { name: "新对话" }));
   await user.click(screen.getByRole("treeitem", { name: /修复测试/ }));
+  await user.click(screen.getByRole("button", { name: "修复测试的更多操作" }));
+  await user.click(screen.getByRole("menuitem", { name: "删除对话" }));
+  await user.click(screen.getByRole("button", { name: "确认删除修复测试" }));
   await user.click(screen.getByRole("button", { name: "任务检查器" }));
 
   expect(transport.request).toHaveBeenCalledWith("session.create");
   expect(transport.request).toHaveBeenCalledWith("session.resume", {
+    session_id: "b".repeat(24),
+  });
+  expect(transport.request).toHaveBeenCalledWith("session.delete", {
     session_id: "b".repeat(24),
   });
   expect(transport.request).toHaveBeenCalledWith("changes.list");
@@ -194,8 +268,10 @@ test("creates or resumes sessions and requests changes for the contextual drawer
       data: {
         changes: [
           {
-            id: "change-1",
+            id: "a".repeat(32),
             path: "src/demo.py",
+            kind: "created",
+            reversible: true,
             additions: 1,
             deletions: 0,
             diff: "--- a/src/demo.py\n+++ b/src/demo.py\n@@ -0,0 +1 @@\n+hello\n",
@@ -205,8 +281,44 @@ test("creates or resumes sessions and requests changes for the contextual drawer
     });
   });
 
-  expect(await screen.findByRole("button", { name: /src\/demo.py/ })).toBeInTheDocument();
+  const changeRow = await screen.findByRole("button", { name: /src\/demo.py/ });
+  expect(screen.queryByLabelText("src/demo.py 的变更")).not.toBeInTheDocument();
+  expect(screen.queryByText("hello")).not.toBeInTheDocument();
+
+  await user.click(changeRow);
+  expect(screen.getByLabelText("src/demo.py 的变更")).toBeInTheDocument();
   expect(screen.getByText("hello")).toBeInTheDocument();
+  await user.click(changeRow);
+  expect(screen.queryByLabelText("src/demo.py 的变更")).not.toBeInTheDocument();
+
+  await user.click(changeRow);
+  await user.click(screen.getByRole("button", { name: "查看文件" }));
+  expect(transport.request).toHaveBeenCalledWith("file.preview", { path: "src/demo.py" });
+  act(() => {
+    transport.emit({
+      protocol_version: 2,
+      type: "file.previewed",
+      seq: 3,
+      session_id: "a".repeat(24),
+      turn_id: null,
+      data: {
+        path: "src/demo.py",
+        language: "python",
+        size: 10,
+        text: "full file\n",
+      },
+    });
+  });
+  const previewFrame = screen.getByLabelText("src/demo.py 的变更");
+  expect(previewFrame).toHaveTextContent("full file");
+  expect(screen.queryByLabelText("src/demo.py 文件预览")).not.toBeInTheDocument();
+  await user.click(screen.getByRole("button", { name: "查看 Diff" }));
+  expect(previewFrame).toHaveTextContent("hello");
+  expect(previewFrame).not.toHaveTextContent("full file");
+
+  await user.click(screen.getByRole("button", { name: "撤销此变更" }));
+  await user.click(screen.getByRole("button", { name: "确认撤销" }));
+  expect(transport.request).toHaveBeenCalledWith("change.undo", { change_id: "a".repeat(32) });
 });
 
 test("configures a provider through desktop IPC without sending the API key over transport", async () => {

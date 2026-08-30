@@ -2,6 +2,7 @@ import { useState } from "react";
 
 import type { TimelineItem } from "../state/store";
 import { ChevronIcon } from "./icons";
+import { StructuredToolDetail } from "./StructuredToolDetail";
 
 type Activity = Extract<TimelineItem, { kind: "activity" }>;
 
@@ -26,11 +27,6 @@ function activitySteps(detail: unknown): ActivityStep[] {
       summary: typeof value.summary === "string" ? value.summary : "",
     }];
   });
-}
-
-function rawDetail(detail: unknown): unknown {
-  if (typeof detail !== "object" || detail === null || !("raw" in detail)) return detail;
-  return (detail as { raw?: unknown }).raw;
 }
 
 export function ActivityRow({ item, showRaw = false }: { item: Activity; showRaw?: boolean }) {
@@ -95,7 +91,7 @@ export function ActivityRow({ item, showRaw = false }: { item: Activity; showRaw
         </ol>
       ) : null}
       {detailVisible && item.detail !== undefined ? (
-        <pre className="activity-detail">{JSON.stringify(rawDetail(item.detail), null, 2)}</pre>
+        <StructuredToolDetail detail={item.detail} activityKind={item.activityKind} />
       ) : null}
     </div>
   );

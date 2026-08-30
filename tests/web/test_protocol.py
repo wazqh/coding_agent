@@ -32,11 +32,31 @@ def test_protocol_accepts_closed_request_shapes() -> None:
             "decision": "allow_once",
         }
     )
+    undo = parse_client_request(
+        {
+            "protocol_version": 2,
+            "type": "change.undo",
+            "request_id": "request-3",
+            "change_id": "a" * 32,
+        }
+    )
+    delete_session = parse_client_request(
+        {
+            "protocol_version": 2,
+            "type": "session.delete",
+            "request_id": "request-4",
+            "session_id": "b" * 24,
+        }
+    )
 
     assert isinstance(turn, TurnStartRequest)
     assert turn.task == "Fix the validation bug"
     assert isinstance(approval, ApprovalResolveRequest)
     assert approval.decision.value == "allow_once"
+    assert type(undo).__name__ == "ChangeUndoRequest"
+    assert undo.change_id == "a" * 32
+    assert type(delete_session).__name__ == "SessionDeleteRequest"
+    assert delete_session.session_id == "b" * 24
 
 
 @pytest.mark.parametrize(
@@ -63,6 +83,18 @@ def test_protocol_accepts_closed_request_shapes() -> None:
             "type": "turn.start",
             "request_id": "r1",
             "task": "x" * 100_001,
+        },
+        {
+            "protocol_version": 2,
+            "type": "change.undo",
+            "request_id": "r1",
+            "change_id": "../../workspace",
+        },
+        {
+            "protocol_version": 2,
+            "type": "session.delete",
+            "request_id": "r1",
+            "session_id": "../escape",
         },
     ],
 )

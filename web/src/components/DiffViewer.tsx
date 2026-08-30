@@ -1,49 +1,81 @@
-import { Diff, Hunk, parseDiff } from "react-diff-view";
-import "react-diff-view/style/index.css";
+import { useEffect, useState } from "react";
 
-import type { ChangeSummary } from "../state/store";
+import type { ChangeSummary, FilePreviewData } from "../state/store";
+import { UnifiedDiff } from "./UnifiedDiff";
 
 interface DiffViewerProps {
   change: ChangeSummary;
   onPreview?: (path: string) => void;
+  onUndo?: (changeId: string) => void;
+  busy?: boolean;
+  previewOpen?: boolean;
+  filePreview?: FilePreviewData | null;
 }
 
-export function DiffViewer({ change, onPreview }: DiffViewerProps) {
-  const files = parseDiff(change.diff);
+export function DiffViewer({
+  change,
+  onPreview,
+  onUndo,
+  busy = false,
+  previewOpen = false,
+  filePreview = null,
+}: DiffViewerProps) {
+  const [undoArmed, setUndoArmed] = useState(false);
+  useEffect(() => setUndoArmed(false), [change.id]);
 
   return (
     <section className="diff-viewer" aria-label={`${change.path} 的变更`}>
       <div className="diff-toolbar">
         <div>
           <span className="mono-label">{change.path}</span>
-          <small>统一 Diff</small>
+          <small>
+            {previewOpen
+              ? filePreview
+                ? `文件预览 · ${filePreview.language} · ${filePreview.size.toLocaleString()} B · 只读`
+                : "正在读取文件…"
+              : `${change.kind === "created" ? "新建文件" : "修改文件"} · Unified Diff`}
+          </small>
         </div>
-        <span className="diff-stats mono-label">
-          <b>+{change.additions}</b>
-          <i>−{change.deletions}</i>
-        </span>
-        {onPreview ? (
-          <button type="button" onClick={() => onPreview(change.path)}>
-            查看文件
-          </button>
-        ) : null}
-      </div>
-      <div className="diff-scroll" data-testid="diff-scroll">
-        {files.length ? (
-          files.map((file, index) => (
-            <Diff
-              key={`${file.oldRevision}-${file.newRevision}-${index}`}
-              viewType="unified"
-              diffType={file.type}
-              hunks={file.hunks}
+        <div className="diff-toolbar-actions">
+          <span className="diff-stats mono-label">
+            <b>+{change.additions}</b>
+            <i>−{change.deletions}</i>
+          </span>
+          {onPreview ? (
+            <button type="button" onClick={() => onPreview(change.path)}>
+              {previewOpen ? "查看 Diff" : "查看文件"}
+            </button>
+          ) : null}
+          {onUndo && change.reversible !== false ? (
+            <button
+              type="button"
+              className={undoArmed ? "diff-undo is-armed" : "diff-undo"}
+              disabled={busy}
+              onClick={() => {
+                if (!undoArmed) {
+                  setUndoArmed(true);
+                  return;
+                }
+                onUndo(change.id);
+                setUndoArmed(false);
+              }}
             >
-              {(hunks) => hunks.map((hunk) => <Hunk key={hunk.content} hunk={hunk} />)}
-            </Diff>
-          ))
-        ) : (
-          <pre>{change.diff}</pre>
-        )}
+              {undoArmed ? "确认撤销" : "撤销此变更"}
+            </button>
+          ) : null}
+        </div>
       </div>
+      {previewOpen ? (
+        <div className="diff-scroll file-content-scroll" data-testid="file-content-scroll">
+          {filePreview ? (
+            <pre><code>{filePreview.text}</code></pre>
+          ) : (
+            <div className="file-preview-loading">正在读取文件…</div>
+          )}
+        </div>
+      ) : (
+        <UnifiedDiff value={change.diff} />
+      )}
     </section>
   );
 }

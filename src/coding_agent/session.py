@@ -7,6 +7,8 @@ from pathlib import Path
 from typing import Any
 from uuid import uuid4
 
+from coding_agent.safety.paths import atomic_write_text
+
 
 class SessionError(ValueError):
     pass
@@ -62,6 +64,25 @@ class SessionStore:
 
     def messages(self, session_id: str) -> list[dict[str, Any]]:
         return [record["data"] for record in self.replay(session_id) if record["type"] == "message"]
+
+    def delete(self, session_id: str) -> str:
+        """Delete one session and return its exact JSONL payload for rollback."""
+
+        path = self._path(session_id)
+        if not path.is_file():
+            raise SessionError(f"session not found: {session_id}")
+        payload = path.read_text(encoding="utf-8")
+        path.unlink()
+        return payload
+
+    def restore(self, session_id: str, payload: str) -> None:
+        """Restore a session deleted by :meth:`delete` without overwriting another writer."""
+
+        path = self._path(session_id)
+        if path.exists():
+            raise SessionError(f"session already exists: {session_id}")
+        path.parent.mkdir(parents=True, exist_ok=True)
+        atomic_write_text(path, payload)
 
     def list(self) -> list[dict[str, Any]]:
         if not self.directory.is_dir():

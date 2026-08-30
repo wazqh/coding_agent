@@ -67,6 +67,25 @@ test("rejects malformed sessions, changes, and file previews", () => {
   ).toBeNull();
 });
 
+test("validates live file change records before updating the Diff panel", () => {
+  const recorded = {
+    ...valid,
+    type: "change.recorded",
+    data: {
+      id: "a".repeat(32),
+      path: "src/new.py",
+      kind: "created",
+      additions: 1,
+      deletions: 0,
+      diff: "--- a/src/new.py\n+++ b/src/new.py\n@@ -0,0 +1 @@\n+new\n",
+    },
+  };
+
+  expect(parseViewEvent(recorded)).toEqual(recorded);
+  expect(parseViewEvent({ ...recorded, data: { ...recorded.data, kind: "deleted" } })).toBeNull();
+  expect(parseViewEvent({ ...recorded, data: { ...recorded.data, additions: -1 } })).toBeNull();
+});
+
 test("batches deltas for 50ms and flushes before a non-delta event", () => {
   vi.useFakeTimers();
   const transport = new WebSocketTransport();

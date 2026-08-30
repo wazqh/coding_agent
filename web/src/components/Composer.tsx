@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState } from "react";
 
-import { ArrowUpIcon, StopIcon } from "./icons";
+import { ArrowUpIcon, InspectorIcon, StopIcon } from "./icons";
 import type { CompletionState } from "../state/store";
 
 interface ComposerProps {
@@ -14,6 +14,7 @@ interface ComposerProps {
   onOpenModel?: () => void;
   onOpenPermissions?: () => void;
   onOpenContext?: () => void;
+  onOpenInspector?: () => void;
   onSend?: (task: string) => boolean | void;
   onStop?: () => void;
 }
@@ -35,6 +36,7 @@ export function Composer({
   onOpenModel = () => undefined,
   onOpenPermissions = () => undefined,
   onOpenContext = () => undefined,
+  onOpenInspector = () => undefined,
   onSend = () => undefined,
   onStop = () => undefined,
 }: ComposerProps) {
@@ -191,15 +193,26 @@ export function Composer({
             <button type="button" className="option-button mono-label" onClick={onOpenModel}>{modelName}</button>
             <button type="button" className="option-button" onClick={onOpenPermissions}>{permissionLabels[permissions]}</button>
           </div>
-          <button
-            type={busy ? "button" : "submit"}
-            className={`send-button${busy ? " is-stop" : ""}`}
-            aria-label={busy ? "停止任务" : "发送任务"}
-            onClick={busy ? onStop : undefined}
-            disabled={!busy && (!ready || !task.trim())}
-          >
-            {busy ? <StopIcon /> : <ArrowUpIcon />}
-          </button>
+          <div className="composer-primary-actions">
+            <button
+              type="button"
+              className="composer-inspector-button"
+              aria-label="任务检查器"
+              onClick={onOpenInspector}
+            >
+              <InspectorIcon />
+              <span>任务检查器</span>
+            </button>
+            <button
+              type={busy ? "button" : "submit"}
+              className={`send-button${busy ? " is-stop" : ""}`}
+              aria-label={busy ? "停止任务" : "发送任务"}
+              onClick={busy ? onStop : undefined}
+              disabled={!busy && (!ready || !task.trim())}
+            >
+              {busy ? <StopIcon /> : <ArrowUpIcon />}
+            </button>
+          </div>
         </div>
       </form>
     </div>

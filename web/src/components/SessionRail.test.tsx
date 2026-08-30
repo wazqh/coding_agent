@@ -70,6 +70,94 @@ test("creates and resumes workspace sessions", async () => {
   expect(screen.queryByRole("treeitem", { name: /整理文档/ })).not.toBeInTheDocument();
 });
 
+test("deletes a session only after explicit inline confirmation", async () => {
+  const user = userEvent.setup();
+  const onDeleteSession = vi.fn();
+  render(
+    <SessionRail
+      productName="Forge"
+      workspaceName="coding_agent"
+      busy={false}
+      open
+      sessions={sessions}
+      projects={projects}
+      activeSessionId={sessions[0].id}
+      onNewSession={() => undefined}
+      onResumeSession={() => undefined}
+      onDeleteSession={onDeleteSession}
+    />,
+  );
+
+  await user.click(screen.getByRole("button", { name: "修复测试的更多操作" }));
+  await user.click(screen.getByRole("menuitem", { name: "删除对话" }));
+
+  expect(screen.getByText("同时删除此对话引入的 Memory。此操作无法撤销。")).toBeInTheDocument();
+  expect(onDeleteSession).not.toHaveBeenCalled();
+
+  await user.click(screen.getByRole("button", { name: "确认删除修复测试" }));
+  expect(onDeleteSession).toHaveBeenCalledWith("a".repeat(24));
+});
+
+test("disables an already-open delete confirmation when a turn starts", async () => {
+  const user = userEvent.setup();
+  const onDeleteSession = vi.fn();
+  const view = render(
+    <SessionRail
+      productName="Forge"
+      workspaceName="coding_agent"
+      busy={false}
+      open
+      sessions={sessions}
+      projects={projects}
+      activeSessionId={sessions[0].id}
+      onNewSession={() => undefined}
+      onResumeSession={() => undefined}
+      onDeleteSession={onDeleteSession}
+    />,
+  );
+  await user.click(screen.getByRole("button", { name: "修复测试的更多操作" }));
+  await user.click(screen.getByRole("menuitem", { name: "删除对话" }));
+
+  view.rerender(
+    <SessionRail
+      productName="Forge"
+      workspaceName="coding_agent"
+      busy
+      open
+      sessions={sessions}
+      projects={projects}
+      activeSessionId={sessions[0].id}
+      onNewSession={() => undefined}
+      onResumeSession={() => undefined}
+      onDeleteSession={onDeleteSession}
+    />,
+  );
+
+  const confirm = screen.getByRole("button", { name: "确认删除修复测试" });
+  expect(confirm).toBeDisabled();
+  await user.click(confirm);
+  expect(onDeleteSession).not.toHaveBeenCalled();
+});
+
+test("does not expose deletion for sessions in another project", () => {
+  render(
+    <SessionRail
+      productName="Forge"
+      workspaceName="coding_agent"
+      busy={false}
+      open
+      sessions={sessions}
+      projects={projects}
+      activeSessionId={null}
+      onNewSession={() => undefined}
+      onResumeSession={() => undefined}
+      onDeleteSession={() => undefined}
+    />,
+  );
+
+  expect(screen.queryByRole("button", { name: "整理文档的更多操作" })).not.toBeInTheDocument();
+});
+
 test("locks session switching while the agent is busy", () => {
   render(
     <SessionRail

@@ -10,8 +10,12 @@ import pytest
 
 from coding_agent.controller import RunResult
 from coding_agent.events import AgentEvent, AgentState, EventKind
-from coding_agent.safety.approval import ApprovalDecision, ApprovalRequest
+from coding_agent.memory import MemoryStore
+from coding_agent.safety.approval import ApprovalDecision, ApprovalPolicy, ApprovalRequest
+from coding_agent.safety.paths import WorkspacePaths
 from coding_agent.session import SessionStore
+from coding_agent.tools.base import ToolContext, WorkingState
+from coding_agent.tools.registry import default_registry
 from coding_agent.web.approval import ApprovalBroker
 from coding_agent.web.coordinator import CoordinatorBusyError, CoordinatorError, TurnCoordinator
 from coding_agent.web.protocol import ViewEventType
@@ -206,6 +210,50 @@ def test_coordinator_prevents_session_switch_while_busy() -> None:
     assert coordinator.wait_until_idle(timeout=1)
     coordinator.resume_session("c" * 24)
     assert runtime.created == [None, "c" * 24]
+
+
+def test_startup_prefers_the_latest_meaningful_session_without_creating_an_empty_one(
+    tmp_path: Path,
+) -> None:
+    sessions = SessionStore(tmp_path / "data")
+    meaningful = sessions.create({"workspace": str(tmp_path)})
+    sessions.append_message(meaningful, {"role": "user", "content": "continue this work"})
+    empty = sessions.create({"workspace": str(tmp_path)})
+    foreign_workspace = tmp_path / "foreign"
+    foreign_workspace.mkdir()
+    foreign = sessions.create({"workspace": str(foreign_workspace)})
+    sessions.append_message(foreign, {"role": "user", "content": "not this project"})
+    coordinator = TurnCoordinator()
+    runtime = FakeRuntime(coordinator.handle_agent_event)
+    coordinator.attach_runtime(runtime)
+    coordinator.configure_workspace_services(workspace=tmp_path, sessions=sessions)
+
+    restored = coordinator.restore_startup_session()
+
+    assert restored == meaningful
+    assert coordinator.session_id == meaningful
+    assert runtime.created == [meaningful]
+    assert {item["id"] for item in sessions.list()} == {meaningful, empty, foreign}
+
+
+def test_startup_reuses_the_latest_empty_session_when_no_history_exists(
+    tmp_path: Path,
+) -> None:
+    sessions = SessionStore(tmp_path / "data")
+    older = sessions.create({"workspace": str(tmp_path)})
+    latest = sessions.create({"workspace": str(tmp_path)})
+    sessions.append(latest, "configuration", {"model": "newer-empty-session"})
+    coordinator = TurnCoordinator()
+    runtime = FakeRuntime(coordinator.handle_agent_event)
+    coordinator.attach_runtime(runtime)
+    coordinator.configure_workspace_services(workspace=tmp_path, sessions=sessions)
+
+    restored = coordinator.restore_startup_session()
+
+    assert restored == latest
+    assert coordinator.session_id == latest
+    assert runtime.created == [latest]
+    assert {item["id"] for item in sessions.list()} == {older, latest}
 
 
 def test_management_mutation_is_rejected_while_turn_is_busy() -> None:
@@ -446,6 +494,153 @@ def test_resume_rejects_session_from_another_workspace(tmp_path: Path) -> None:
     assert runtime.created == []
 
 
+def test_delete_session_removes_only_its_evidence_memory(tmp_path: Path) -> None:
+    sessions = SessionStore(tmp_path / "data")
+    deleted = sessions.create({"workspace": str(tmp_path)})
+    retained = sessions.create({"workspace": str(tmp_path)})
+    foreign_workspace = tmp_path / "other"
+    foreign_workspace.mkdir()
+    foreign = sessions.create({"workspace": str(foreign_workspace)})
+    memory = MemoryStore(data_dir=tmp_path / "data", workspace=tmp_path, enabled=True)
+    memory.remember(content="delete this session memory", session_id=deleted)
+    memory.remember(content="keep this session memory", session_id=retained)
+
+    coordinator = TurnCoordinator()
+    runtime = FakeRuntime(coordinator.handle_agent_event)
+    coordinator.attach_runtime(runtime)
+    coordinator.configure_workspace_services(
+        workspace=tmp_path,
+        sessions=sessions,
+    )
+    coordinator.resume_session(retained)
+
+    result = coordinator.delete_session(deleted)
+
+    assert result["deleted_memory_count"] == 1
+    assert result["replacement_session_id"] is None
+    assert {item["id"] for item in sessions.list()} == {retained, foreign}
+    assert [item.content for item in memory.list(include_disabled=True)] == [
+        "keep this session memory"
+    ]
+    assert coordinator.session_id == retained
+
+
+def test_delete_active_session_creates_a_clean_replacement(tmp_path: Path) -> None:
+    sessions = SessionStore(tmp_path / "data")
+    active = sessions.create({"workspace": str(tmp_path)})
+    memory = MemoryStore(data_dir=tmp_path / "data", workspace=tmp_path, enabled=True)
+    memory.remember(content="active session memory", session_id=active)
+    coordinator = TurnCoordinator()
+    runtime = FakeRuntime(coordinator.handle_agent_event)
+    coordinator.attach_runtime(runtime)
+    coordinator.configure_workspace_services(
+        workspace=tmp_path,
+        sessions=sessions,
+        memory=memory,
+    )
+    coordinator.resume_session(active)
+
+    result = coordinator.delete_session(active)
+
+    assert result["replacement_session_id"] == SESSION_ID
+    assert coordinator.session_id == SESSION_ID
+    assert sessions.list() == []
+    assert memory.list(include_disabled=True) == []
+
+
+def test_delete_rejects_foreign_workspace_session(tmp_path: Path) -> None:
+    sessions = SessionStore(tmp_path / "data")
+    foreign_workspace = tmp_path / "other"
+    foreign_workspace.mkdir()
+    foreign = sessions.create({"workspace": str(foreign_workspace)})
+    coordinator = TurnCoordinator()
+    coordinator.attach_runtime(FakeRuntime(coordinator.handle_agent_event))
+    coordinator.configure_workspace_services(
+        workspace=tmp_path,
+        sessions=sessions,
+        memory=MemoryStore(data_dir=tmp_path / "data", workspace=tmp_path),
+    )
+
+    with pytest.raises(CoordinatorError, match="current workspace"):
+        coordinator.delete_session(foreign)
+
+    assert [item["id"] for item in sessions.list()] == [foreign]
+
+
+def test_delete_rolls_back_session_when_memory_cleanup_fails(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    sessions = SessionStore(tmp_path / "data")
+    session_id = sessions.create({"workspace": str(tmp_path)})
+    sessions.append_message(session_id, {"role": "user", "content": "keep on failure"})
+    memory = MemoryStore(data_dir=tmp_path / "data", workspace=tmp_path, enabled=True)
+    memory.remember(content="memory cleanup fails", session_id=session_id)
+    coordinator = TurnCoordinator()
+    coordinator.attach_runtime(FakeRuntime(coordinator.handle_agent_event))
+    coordinator.configure_workspace_services(
+        workspace=tmp_path,
+        sessions=sessions,
+        memory=memory,
+    )
+
+    def fail_cleanup(_session_id: str) -> int:
+        raise OSError("disk full")
+
+    monkeypatch.setattr(memory, "delete_by_session", fail_cleanup)
+
+    with pytest.raises(CoordinatorError, match="session memory"):
+        coordinator.delete_session(session_id)
+
+    assert sessions.messages(session_id) == [{"role": "user", "content": "keep on failure"}]
+    assert len(memory.list(include_disabled=True)) == 1
+
+
+def test_delete_rolls_back_when_memory_file_is_corrupt(tmp_path: Path) -> None:
+    sessions = SessionStore(tmp_path / "data")
+    session_id = sessions.create({"workspace": str(tmp_path)})
+    sessions.append_message(session_id, {"role": "user", "content": "keep corrupt memory"})
+    memory = MemoryStore(data_dir=tmp_path / "data", workspace=tmp_path, enabled=True)
+    memory.path.parent.mkdir(parents=True)
+    memory.path.write_text("not-json", encoding="utf-8")
+    coordinator = TurnCoordinator()
+    coordinator.attach_runtime(FakeRuntime(coordinator.handle_agent_event))
+    coordinator.configure_workspace_services(workspace=tmp_path, sessions=sessions, memory=memory)
+
+    with pytest.raises(CoordinatorError, match="session memory"):
+        coordinator.delete_session(session_id)
+
+    assert sessions.messages(session_id) == [{"role": "user", "content": "keep corrupt memory"}]
+    assert memory.path.read_text(encoding="utf-8") == "not-json"
+
+
+def test_delete_active_session_keeps_data_when_replacement_creation_fails(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    sessions = SessionStore(tmp_path / "data")
+    active = sessions.create({"workspace": str(tmp_path)})
+    memory = MemoryStore(data_dir=tmp_path / "data", workspace=tmp_path, enabled=True)
+    memory.remember(content="keep when replacement fails", session_id=active)
+    coordinator = TurnCoordinator()
+    runtime = FakeRuntime(coordinator.handle_agent_event)
+    coordinator.attach_runtime(runtime)
+    coordinator.configure_workspace_services(workspace=tmp_path, sessions=sessions, memory=memory)
+    coordinator.resume_session(active)
+
+    def fail_create(_session_id: str | None = None) -> FakeController:
+        raise OSError("disk full")
+
+    monkeypatch.setattr(runtime, "create", fail_create)
+
+    with pytest.raises(CoordinatorError, match="replacement session"):
+        coordinator.delete_session(active)
+
+    assert coordinator.session_id == active
+    assert [item["id"] for item in sessions.list()] == [active]
+    assert [item.content for item in memory.list(include_disabled=True)] == [
+        "keep when replacement fails"
+    ]
+
+
 def test_deleted_file_change_uses_the_workspace_path_not_dev_null(tmp_path: Path) -> None:
     coordinator = TurnCoordinator()
     runtime = FakeRuntime(coordinator.handle_agent_event)
@@ -528,3 +723,39 @@ def test_coordinator_exposes_only_recorded_changes_and_safe_preview(tmp_path: Pa
             "diff": "--- a/demo.py\n+++ b/demo.py\n@@ -1 +1 @@\n-answer = 41\n+answer = 42\n",
         }
     ]
+
+
+def test_coordinator_undoes_the_exact_recorded_diff_and_updates_the_change_list(
+    tmp_path: Path,
+) -> None:
+    coordinator = TurnCoordinator()
+    runtime = FakeRuntime(coordinator.handle_agent_event)
+    coordinator.attach_runtime(runtime)
+    coordinator.configure_workspace_services(
+        workspace=tmp_path,
+        sessions=SessionStore(tmp_path / "data"),
+    )
+    coordinator.new_session()
+    controller = runtime.controllers[-1]
+    working = WorkingState()
+    controller.working = working
+    tool_context = ToolContext(
+        workspace=WorkspacePaths(tmp_path),
+        approval=ApprovalPolicy("auto"),
+        session_id=controller.session_id,
+        turn_id="turn-undo",
+        working=working,
+    )
+    written = default_registry().execute(
+        "write_file",
+        {"path": "new.py", "content": "print('new')\n"},
+        tool_context,
+    )
+
+    before = coordinator.list_changes()
+    undone = coordinator.undo_change(str(written.data["change_id"]))
+
+    assert before[0]["kind"] == "created"
+    assert undone["path"] == "new.py"
+    assert coordinator.list_changes() == []
+    assert not (tmp_path / "new.py").exists()

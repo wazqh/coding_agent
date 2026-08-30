@@ -83,15 +83,17 @@ class MemoryStore:
         self.path = data_dir / "memory" / f"{self.project_id}.json"
         self.enabled = enabled
 
-    def _load(self) -> list[MemoryRecord]:
+    def _load(self, *, strict: bool = False) -> list[MemoryRecord]:
         if not self.path.is_file():
             return []
         try:
             value = json.loads(self.path.read_text(encoding="utf-8"))
             if not isinstance(value, list):
-                return []
+                raise MemoryError("memory storage must contain a list")
             return [MemoryRecord.model_validate(item) for item in value]
-        except (OSError, json.JSONDecodeError, ValueError):
+        except (OSError, json.JSONDecodeError, ValueError) as exc:
+            if strict:
+                raise MemoryError(f"could not read memory storage: {exc}") from exc
             return []
 
     def _save(self, records: list[MemoryRecord]) -> None:
@@ -166,6 +168,16 @@ class MemoryStore:
 
     def clear(self) -> None:
         self._save([])
+
+    def delete_by_session(self, session_id: str) -> int:
+        """Permanently remove memories whose evidence came from one deleted session."""
+
+        records = self._load(strict=True)
+        retained = [record for record in records if record.evidence_session_id != session_id]
+        deleted = len(records) - len(retained)
+        if deleted:
+            self._save(retained)
+        return deleted
 
     def query(
         self,

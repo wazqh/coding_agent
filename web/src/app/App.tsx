@@ -289,9 +289,9 @@ export function App({
       return transport?.request("context.compact") ?? false;
     }
     if (command === "/raw") {
-      if (!argument) setCommandFeedback(`原始工具结果当前${showRaw ? "展开" : "折叠"}。使用 /raw on|off 修改。`);
+      if (!argument) setCommandFeedback(`完整工具详情当前${showRaw ? "展开" : "折叠"}。使用 /raw on|off 修改。`);
       else if (argument === "on" || argument === "off") setShowRaw(argument === "on");
-      else setCommandFeedback("Raw 用法：/raw、/raw on 或 /raw off。");
+      else setCommandFeedback("详情用法：/raw、/raw on 或 /raw off。");
       return true;
     }
     if (command === "/clear") {
@@ -331,6 +331,9 @@ export function App({
           if (transport?.request("session.resume", { session_id: nextSessionId })) {
             setRailOpen(false);
           }
+        }}
+        onDeleteSession={(deletedSessionId) => {
+          transport?.request("session.delete", { session_id: deletedSessionId });
         }}
         onOpenProject={(projectPath, nextSessionId) => {
           if (effectiveBusy) return;
@@ -372,10 +375,6 @@ export function App({
         <WorkspaceHeader
           taskTitle={activeSessionTitle}
           projectName={effectiveWorkspaceName}
-          onOpenInspector={() => {
-            if (drawerView === "changes") transport?.request("changes.list");
-            setDrawerOpen(true);
-          }}
           onToggleRail={() => setRailOpen((value) => !value)}
         />
         <main
@@ -414,7 +413,7 @@ export function App({
           ) : (
             <div className="empty-conversation">
               <span className="empty-kicker">Local coding agent</span>
-              <h1>从一个清晰的任务开始</h1>
+              <h1>今天想做点什么？</h1>
               <p>
                 描述您想完成的修改。Agent 会读取项目、提出计划、请求必要审批，并用真实验证结果完成闭环。
               </p>
@@ -458,6 +457,10 @@ export function App({
             setDrawerOpen(true);
             transport?.request("context.get");
           }}
+          onOpenInspector={() => {
+            if (drawerView === "changes") transport?.request("changes.list");
+            setDrawerOpen(true);
+          }}
           onSend={executeInput}
           onStop={() => transport?.request("turn.cancel")}
         />
@@ -468,6 +471,9 @@ export function App({
           filePreview={filePreview}
           onPreview={(path) => {
             transport?.request("file.preview", { path });
+          }}
+          onUndoChange={(changeId) => {
+            transport?.request("change.undo", { change_id: changeId });
           }}
           key={drawerView}
           initialTab={drawerView}
@@ -505,8 +511,8 @@ export function App({
             return saved;
           }}
           onPermissionChange={(mode) => transport?.request("permissions.set", { mode })}
-          onStepsChange={(value) => transport?.request("steps.set", { value })}
-          onStepsReset={() => transport?.request("steps.reset")}
+          onStepsChange={(value) => transport?.request("steps.set", { value }) ?? false}
+          onStepsReset={() => transport?.request("steps.reset") ?? false}
           onMemoryList={() => transport?.request("memory.list")}
           onMemoryToggle={(enabled) => transport?.request("memory.toggle", { enabled })}
           onRemember={(content) => transport?.request("memory.remember", { content })}

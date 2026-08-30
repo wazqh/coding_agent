@@ -1,3 +1,5 @@
+import type { ReactNode } from "react";
+
 import type { ApprovalDecision } from "../protocol/types";
 import type { TimelineItem } from "../state/store";
 import { ActivityRow } from "./ActivityRow";
@@ -17,6 +19,20 @@ interface TimelineProps {
     maxSteps: number;
     contextLeft: number;
   } | null;
+}
+
+type WorkItem = Extract<
+  TimelineItem,
+  { kind: "activity" | "approval" | "plan" | "error" }
+>;
+
+function isWorkItem(item: TimelineItem): item is WorkItem {
+  return (
+    item.kind === "activity" ||
+    item.kind === "approval" ||
+    item.kind === "plan" ||
+    item.kind === "error"
+  );
 }
 
 const workingLabels: Record<string, string> = {
@@ -64,80 +80,111 @@ export function Timeline({
   const activePlanId = working
     ? [...items].reverse().find((item) => item.kind === "plan")?.id
     : undefined;
+
+  const renderWorkItem = (item: WorkItem): ReactNode => {
+    if (item.kind === "activity") {
+      return item.activityKind === "validation" ? (
+        <ValidationCard item={item} key={item.id} />
+      ) : (
+        <ActivityRow item={item} showRaw={showRaw} key={item.id} />
+      );
+    }
+    if (item.kind === "approval") {
+      return (
+        <ApprovalCard
+          item={item}
+          onApproval={onApproval}
+          available={approvalAvailable}
+          key={item.id}
+        />
+      );
+    }
+    if (item.kind === "plan") {
+      return <PlanBlock steps={item.steps} active={item.id === activePlanId} key={item.id} />;
+    }
+    if (item.kind === "error") {
+      return (
+        <section className={`error-row is-${item.severity}`} key={item.id}>
+          <strong>{item.severity === "warning" ? "警告" : "错误"}</strong>
+          <span>{item.message}</span>
+        </section>
+      );
+    }
+    return null;
+  };
+
+  const rendered: ReactNode[] = [];
+  let trace: WorkItem[] = [];
+  const flushTrace = () => {
+    if (!trace.length) return;
+    const current = trace;
+    trace = [];
+    rendered.push(
+      <section className="execution-trace" aria-label="执行轨迹" key={`trace:${current[0].id}`}>
+        {current.map(renderWorkItem)}
+      </section>,
+    );
+  };
+
+  items.forEach((item, index) => {
+    if (isWorkItem(item)) {
+      trace.push(item);
+      return;
+    }
+    flushTrace();
+    if (item.kind === "user") {
+      const startsNewTurn = index > 0 && items[index - 1]?.kind === "completion";
+      rendered.push(
+        <article
+          className={`user-turn${startsNewTurn ? " starts-new-turn" : ""}`}
+          data-lane="user"
+          key={item.id}
+        >
+          <span>您</span>
+          <p>{item.content}</p>
+        </article>,
+      );
+      return;
+    }
+    if (item.kind === "assistant") {
+      rendered.push(
+        <article
+          className={`assistant-turn${item.streaming ? " is-streaming" : ""}`}
+          data-lane="agent"
+          aria-label="Agent 回复"
+          key={item.id}
+        >
+          <MarkdownMessage content={item.content} streaming={item.streaming} />
+        </article>,
+      );
+      return;
+    }
+    rendered.push(
+      <div
+        className={`completion-row is-${item.status} validation-${item.validationStatus}`}
+        key={item.id}
+      >
+        <span>
+          {item.status === "interrupted" || item.status === "cancelled"
+            ? "■"
+            : item.status === "failed"
+              ? "!"
+              : item.validationStatus === "passed"
+                ? "✓"
+                : item.validationStatus === "failed"
+                  ? "!"
+                  : "○"}
+        </span>
+        <strong>{completionLabel(item)}</strong>
+        {item.reason && item.reason !== "assistant completed" ? <small>{item.reason}</small> : null}
+      </div>,
+    );
+  });
+  flushTrace();
+
   return (
     <div className="timeline" role="feed" aria-label="Agent 执行记录">
-      {items.map((item, index) => {
-        if (item.kind === "user") {
-          const startsNewTurn = index > 0 && items[index - 1]?.kind === "completion";
-          return (
-            <article
-              className={`user-turn${startsNewTurn ? " starts-new-turn" : ""}`}
-              key={item.id}
-            >
-              <span>您</span>
-              <p>{item.content}</p>
-            </article>
-          );
-        }
-        if (item.kind === "assistant") {
-          return (
-            <article className={`assistant-turn${item.streaming ? " is-streaming" : ""}`} key={item.id}>
-              <div className="section-rule">
-                <span>Agent</span>
-              </div>
-              <MarkdownMessage content={item.content} streaming={item.streaming} />
-            </article>
-          );
-        }
-        if (item.kind === "activity") {
-          return item.activityKind === "validation" ? (
-            <ValidationCard item={item} key={item.id} />
-          ) : (
-            <ActivityRow item={item} showRaw={showRaw} key={item.id} />
-          );
-        }
-        if (item.kind === "approval") {
-          return (
-            <ApprovalCard
-              item={item}
-              onApproval={onApproval}
-              available={approvalAvailable}
-              key={item.id}
-            />
-          );
-        }
-        if (item.kind === "plan") {
-          return <PlanBlock steps={item.steps} active={item.id === activePlanId} key={item.id} />;
-        }
-        if (item.kind === "error") {
-          return (
-            <section className={`error-row is-${item.severity}`} key={item.id}>
-              <strong>{item.severity === "warning" ? "警告" : "错误"}</strong>
-              <span>{item.message}</span>
-            </section>
-          );
-        }
-        return (
-          <div
-            className={`completion-row is-${item.status} validation-${item.validationStatus}`}
-            key={item.id}
-          >
-            <span>
-              {item.status === "interrupted" || item.status === "cancelled"
-                ? "■"
-                : item.status === "failed"
-                  ? "!"
-                : item.validationStatus === "passed"
-                  ? "✓"
-                  : item.validationStatus === "failed"
-                    ? "!"
-                    : "○"}
-            </span>
-            <strong>{completionLabel(item)}</strong>
-            {item.reason && item.reason !== "assistant completed" ? <small>{item.reason}</small> : null}
-          </div>
-        );
-      })}
+      {rendered}
       {working ? (
         <div
           className="working-row"

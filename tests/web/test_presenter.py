@@ -146,6 +146,7 @@ def test_presenter_keeps_ordinary_shell_commands_as_commands() -> None:
     assert call.data["kind"] == "command"
     assert call.data["title"] == "运行命令"
     assert result.data["kind"] == "command"
+    assert result.data["detail"]["data"]["command"] == "git check-ignore -v test/example.py"
 
 
 def test_presenter_labels_the_runtime_edit_file_tool_as_a_file_change() -> None:
@@ -164,6 +165,47 @@ def test_presenter_labels_the_runtime_edit_file_tool_as_a_file_change() -> None:
     assert call.data["kind"] == "file_change"
     assert call.data["title"] == "修改文件"
     assert call.data["summary"] == "src/app.py"
+
+
+def test_presenter_publishes_a_successful_file_change_immediately() -> None:
+    presenter = AgentEventPresenter()
+    events = presenter.present(
+        _event(
+            EventKind.TOOL_RESULT,
+            {
+                "id": "call-write",
+                "name": "write_file",
+                "result": {
+                    "ok": True,
+                    "code": "OK",
+                    "summary": "created src/new.py",
+                    "data": {
+                        "change_id": "a" * 32,
+                        "change_kind": "created",
+                        "path": "src/new.py",
+                        "sha256": "b" * 64,
+                        "diff": (
+                            "--- a/src/new.py\n+++ b/src/new.py\n@@ -0,0 +1 @@\n+print('new')\n"
+                        ),
+                    },
+                },
+            },
+        )
+    )
+
+    assert [event.type for event in events] == [
+        ViewEventType.ACTIVITY_UPSERT,
+        ViewEventType.CHANGE_RECORDED,
+    ]
+    assert events[1].data == {
+        "id": "a" * 32,
+        "path": "src/new.py",
+        "kind": "created",
+        "additions": 1,
+        "deletions": 0,
+        "diff": "--- a/src/new.py\n+++ b/src/new.py\n@@ -0,0 +1 @@\n+print('new')\n",
+        "reversible": True,
+    }
 
 
 def test_presenter_uses_plan_event_without_duplicate_update_plan_activity() -> None:

@@ -28,3 +28,4 @@ coding-agent.toml.local
 node_modules/
 web/dist-electron/
 *.tsbuildinfo
+Test/

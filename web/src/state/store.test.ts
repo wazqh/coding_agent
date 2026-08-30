@@ -472,6 +472,35 @@ test("stores change review and safe file preview events", () => {
   });
 });
 
+test("adds a newly created file as soon as its change event arrives", () => {
+  const store = createAgentStore();
+
+  store.getState().applyEvent({
+    protocol_version: 2,
+    type: "change.recorded",
+    seq: 1,
+    session_id: sessionId,
+    turn_id: "turn-1",
+    data: {
+      id: "a".repeat(32),
+      path: "src/new.py",
+      kind: "created",
+      additions: 1,
+      deletions: 0,
+      diff: "--- a/src/new.py\n+++ b/src/new.py\n@@ -0,0 +1 @@\n+hello\n",
+    },
+  });
+
+  expect(store.getState().changes).toEqual([
+    expect.objectContaining({
+      id: "a".repeat(32),
+      path: "src/new.py",
+      kind: "created",
+      additions: 1,
+    }),
+  ]);
+});
+
 test("uses the first task to title a newly created session immediately", () => {
   const store = createAgentStore();
   store.getState().applyEvent({

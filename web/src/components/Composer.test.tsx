@@ -77,6 +77,23 @@ test("shows live context usage without hiding the runtime controls", () => {
   expect(screen.getByText("gemini-flash")).toBeInTheDocument();
 });
 
+test("opens the task inspector from the composer controls", async () => {
+  const user = userEvent.setup();
+  const onOpenInspector = vi.fn();
+  render(
+    <Composer
+      busy={false}
+      modelName="gemini-flash"
+      permissions="prompt"
+      onOpenInspector={onOpenInspector}
+    />,
+  );
+
+  await user.click(screen.getByRole("button", { name: "任务检查器" }));
+
+  expect(onOpenInspector).toHaveBeenCalledOnce();
+});
+
 test("keeps keyboard-selected completions visible and applies them with Tab", async () => {
   const user = userEvent.setup();
   const scrollIntoView = vi.fn();

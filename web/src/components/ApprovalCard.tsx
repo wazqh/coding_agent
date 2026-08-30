@@ -1,6 +1,7 @@
 import { useEffect, useState } from "react";
 import type { ApprovalDecision } from "../protocol/types";
 import type { TimelineItem } from "../state/store";
+import { UnifiedDiff } from "./UnifiedDiff";
 
 type Approval = Extract<TimelineItem, { kind: "approval" }>;
 
@@ -20,12 +21,22 @@ export function ApprovalCard({ item, onApproval, available = true }: ApprovalCar
     if (pending) return;
     if (onApproval(item.approvalId, decision)) setPending(decision);
   };
+  const resolvedLabel = (() => {
+    if (!item.resolved) return "需要批准";
+    if (item.decision === "allow_once") return "已允许一次";
+    if (item.decision === "allow_session") return "本会话已允许";
+    if (item.decision === "deny") return "已拒绝";
+    if (item.decision === "cancelled") return "已取消";
+    return "审批已结束";
+  })();
   return (
-    <section className={`approval-card${item.resolved ? " is-resolved" : ""}`}>
+    <section
+      className={`approval-card${item.resolved ? " is-resolved" : ""}${item.decision === "deny" ? " is-denied" : ""}`}
+    >
       <div className="approval-heading">
         <span className="approval-dot" />
         <div>
-          <span>需要批准</span>
+          <span>{resolvedLabel}</span>
           <strong>{item.action === "run_command" ? "运行命令" : item.action}</strong>
         </div>
       </div>
@@ -41,12 +52,10 @@ export function ApprovalCard({ item, onApproval, available = true }: ApprovalCar
           >
             {diffOpen ? "收起拟议变更" : "查看拟议变更"}
           </button>
-          {diffOpen ? <pre>{item.diff}</pre> : null}
+          {diffOpen ? <UnifiedDiff value={item.diff} className="approval-diff-content" /> : null}
         </div>
       ) : null}
-      {item.resolved ? (
-        <div className="approval-resolved">已处理 · {item.decision}</div>
-      ) : (
+      {!item.resolved ? (
         <div className="approval-actions">
           <button
             type="button"
@@ -71,7 +80,7 @@ export function ApprovalCard({ item, onApproval, available = true }: ApprovalCar
             {pending ? "处理中…" : "拒绝"}
           </button>
         </div>
-      )}
+      ) : null}
     </section>
   );
 }

@@ -14,8 +14,8 @@ export function ChangesSummary({ changes, selectedId, onSelect }: ChangesSummary
         <span className="drawer-empty-icon">
           <FileIcon />
         </span>
-        <strong>暂时没有文件变更</strong>
-        <p>Agent 修改工作区后，可在这里逐文件审阅 Diff。</p>
+        <strong>本次运行还没有 Agent 变更</strong>
+        <p>新建或修改文件后，Diff 会立即出现在这里。</p>
       </div>
     );
   }
@@ -23,7 +23,7 @@ export function ChangesSummary({ changes, selectedId, onSelect }: ChangesSummary
   return (
     <section className="changes-summary" aria-label="变更文件">
       <div className="changes-summary-heading">
-        <strong>已记录 {changes.length} 次改动</strong>
+        <strong>Agent 修改 {changes.length} 处</strong>
         <span>
           <b>+{changes.reduce((total, item) => total + item.additions, 0)}</b>
           <i>−{changes.reduce((total, item) => total + item.deletions, 0)}</i>
@@ -36,10 +36,14 @@ export function ChangesSummary({ changes, selectedId, onSelect }: ChangesSummary
             type="button"
             className={`change-row${change.id === selectedId ? " is-selected" : ""}`}
             aria-label={`${change.path}，新增 ${change.additions} 行，删除 ${change.deletions} 行`}
+            aria-expanded={change.id === selectedId}
             onClick={() => onSelect(change)}
           >
             <FileIcon />
-            <span className="change-path mono-label">{change.path}</span>
+            <span className="change-copy">
+              <span className="change-path mono-label">{change.path}</span>
+              <small>{change.kind === "created" ? "新建" : "修改"}</small>
+            </span>
             <span className="change-stats mono-label">
               <b>+{change.additions}</b>
               <i>−{change.deletions}</i>

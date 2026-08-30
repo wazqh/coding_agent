@@ -17,6 +17,7 @@ interface SessionRailProps {
   onToggleCollapsed?: () => void;
   onNewSession: () => void;
   onResumeSession: (sessionId: string) => void;
+  onDeleteSession?: (sessionId: string) => void;
   onOpenProject?: (projectPath: string, sessionId?: string) => void;
   onAddProject?: () => void;
 }
@@ -35,6 +36,7 @@ export function SessionRail({
   onToggleCollapsed = () => undefined,
   onNewSession,
   onResumeSession,
+  onDeleteSession = () => undefined,
   onOpenProject = () => undefined,
   onAddProject = () => undefined,
 }: SessionRailProps) {
@@ -42,6 +44,8 @@ export function SessionRail({
     ? projects
     : [{ name: workspaceName, path: "", current: true, sessions }];
   const [query, setQuery] = useState("");
+  const [menuSessionId, setMenuSessionId] = useState<string | null>(null);
+  const [confirmSessionId, setConfirmSessionId] = useState<string | null>(null);
   const [expandedProjects, setExpandedProjects] = useState<Set<string>>(
     () => new Set(fallbackProjects.filter((project) => project.current).map((project) => project.path)),
   );
@@ -164,23 +168,90 @@ export function SessionRail({
                 </div>
                 {expanded ? (
                   <div role="group" className="project-sessions">
-                    {project.sessions.map((session) => (
-                      <button
-                        key={session.id}
-                        type="button"
-                        role="treeitem"
-                        className={`session-row${session.id === activeSessionId ? " is-current" : ""}`}
-                        disabled={busy}
-                        aria-current={session.id === activeSessionId ? "page" : undefined}
-                        aria-label={session.title || "未命名任务"}
-                        onClick={() => {
-                          if (project.current) onResumeSession(session.id);
-                          else onOpenProject(project.path, session.id);
-                        }}
-                      >
-                        <span className="session-title">{session.title || "未命名任务"}</span>
-                      </button>
-                    ))}
+                    {project.sessions.map((session) => {
+                      const title = session.title || "未命名任务";
+                      const menuOpen = menuSessionId === session.id;
+                      const confirming = confirmSessionId === session.id;
+                      return (
+                        <div
+                          className={`session-entry${session.id === activeSessionId ? " is-current" : ""}`}
+                          key={session.id}
+                        >
+                          <button
+                            type="button"
+                            role="treeitem"
+                            className={`session-row${session.id === activeSessionId ? " is-current" : ""}`}
+                            disabled={busy}
+                            aria-current={session.id === activeSessionId ? "page" : undefined}
+                            aria-label={title}
+                            onClick={() => {
+                              setMenuSessionId(null);
+                              setConfirmSessionId(null);
+                              if (project.current) onResumeSession(session.id);
+                              else onOpenProject(project.path, session.id);
+                            }}
+                          >
+                            <span className="session-title">{title}</span>
+                          </button>
+                          {project.current ? (
+                            <button
+                              type="button"
+                              className="session-more"
+                              disabled={busy}
+                              aria-label={`${title}的更多操作`}
+                              aria-expanded={menuOpen || confirming}
+                              onClick={() => {
+                                setConfirmSessionId(null);
+                                setMenuSessionId(menuOpen ? null : session.id);
+                              }}
+                            >
+                              ···
+                            </button>
+                          ) : null}
+                          {menuOpen ? (
+                            <div className="session-menu" role="menu">
+                              <button
+                                type="button"
+                                role="menuitem"
+                                onClick={() => {
+                                  setMenuSessionId(null);
+                                  setConfirmSessionId(session.id);
+                                }}
+                              >
+                                删除对话
+                              </button>
+                            </div>
+                          ) : null}
+                          {confirming ? (
+                            <div
+                              className="session-delete-confirm"
+                              role="alertdialog"
+                              aria-label={`删除${title}`}
+                            >
+                              <strong>删除“{title}”？</strong>
+                              <p>同时删除此对话引入的 Memory。此操作无法撤销。</p>
+                              <div>
+                                <button type="button" onClick={() => setConfirmSessionId(null)}>
+                                  取消
+                                </button>
+                                <button
+                                  type="button"
+                                  className="is-danger"
+                                  disabled={busy}
+                                  aria-label={`确认删除${title}`}
+                                  onClick={() => {
+                                    setConfirmSessionId(null);
+                                    onDeleteSession(session.id);
+                                  }}
+                                >
+                                  删除
+                                </button>
+                              </div>
+                            </div>
+                          ) : null}
+                        </div>
+                      );
+                    })}
                     {!project.sessions.length ? <div className="empty-project">暂无对话</div> : null}
                   </div>
                 ) : null}

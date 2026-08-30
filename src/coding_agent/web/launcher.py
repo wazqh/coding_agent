@@ -13,6 +13,7 @@ import uvicorn
 from coding_agent.branding import PRODUCT_NAME
 from coding_agent.config import ConfigError
 from coding_agent.controller import AgentController
+from coding_agent.memory import MemoryStore
 from coding_agent.runtime import RuntimeFactory
 from coding_agent.runtime_management import RuntimeManagement
 from coding_agent.web.app import create_web_app
@@ -93,6 +94,11 @@ def launch_web(
     coordinator.configure_workspace_services(
         workspace=runtime.settings.cwd,
         sessions=runtime.sessions,
+        memory=MemoryStore(
+            data_dir=runtime.settings.data_dir,
+            workspace=runtime.settings.cwd,
+            enabled=runtime.settings.memory.enabled,
+        ),
     )
     coordinator.configure_runtime_metadata(
         workspace_name=runtime.settings.cwd.name or str(runtime.settings.cwd),

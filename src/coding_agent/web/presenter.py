@@ -5,6 +5,7 @@ from dataclasses import dataclass, field
 from typing import Any
 
 from coding_agent.events import AgentEvent, AgentState, EventKind
+from coding_agent.web.changes import summarize_diff
 from coding_agent.web.protocol import ViewEvent, ViewEventType
 
 _ROUTINE_TOOLS = {"read_file", "list_files", "search_text"}
@@ -35,6 +36,7 @@ class AgentEventPresenter:
         self._seq = start_seq
         self._call_activity: dict[str, str] = {}
         self._call_kind: dict[str, str] = {}
+        self._call_arguments: dict[str, dict[str, Any]] = {}
         self._routine: dict[str, _RoutineActivity] = {}
 
     def _view(
@@ -85,7 +87,11 @@ class AgentEventPresenter:
         if event.kind is EventKind.TOOL_RESULT:
             if event.data.get("name") == "update_plan":
                 return []
-            return [self._present_tool_result(event)]
+            result = [self._present_tool_result(event)]
+            change = self._present_change(event)
+            if change is not None:
+                result.append(change)
+            return result
         if event.kind is EventKind.PLAN:
             return [
                 self._view(event, ViewEventType.PLAN_UPDATED, {"plan": event.data.get("plan", [])})
@@ -166,6 +172,7 @@ class AgentEventPresenter:
         arguments = event.data.get("arguments", {})
         if not isinstance(arguments, dict):
             arguments = {}
+        self._call_arguments[call_id] = dict(arguments)
         if name in _ROUTINE_TOOLS:
             turn_key = event.turn_id or event.session_id
             routine = self._routine.setdefault(
@@ -225,6 +232,15 @@ class AgentEventPresenter:
         result = event.data.get("result", {})
         if not isinstance(result, dict):
             result = {}
+        if name == "run_command":
+            arguments = self._call_arguments.get(call_id, {})
+            command = arguments.get("command")
+            if isinstance(command, str):
+                result = dict(result)
+                result_data = result.get("data", {})
+                result_data = dict(result_data) if isinstance(result_data, dict) else {}
+                result_data.setdefault("command", command)
+                result["data"] = result_data
         activity_id = self._call_activity.get(call_id, f"tool:{call_id}")
         status = "completed" if result.get("ok") else "failed"
         count: int | None = None
@@ -265,6 +281,41 @@ class AgentEventPresenter:
         if count is not None:
             data["count"] = count
         return self._view(event, ViewEventType.ACTIVITY_UPSERT, data)
+
+    def _present_change(self, event: AgentEvent) -> ViewEvent | None:
+        result = event.data.get("result", {})
+        if not isinstance(result, dict) or result.get("ok") is not True:
+            return None
+        data = result.get("data", {})
+        if not isinstance(data, dict):
+            return None
+        change_id = data.get("change_id")
+        kind = data.get("change_kind")
+        path = data.get("path")
+        diff = data.get("diff")
+        if not (
+            isinstance(change_id, str)
+            and isinstance(kind, str)
+            and isinstance(path, str)
+            and isinstance(diff, str)
+        ):
+            return None
+        if kind not in {"created", "modified"}:
+            return None
+        summary = summarize_diff(
+            change_id=change_id,
+            path=path,
+            kind=kind,
+            diff=diff,
+        )
+        summary["reversible"] = data.get("reversible") is not False and not bool(
+            result.get("truncated")
+        )
+        return self._view(
+            event,
+            ViewEventType.CHANGE_RECORDED,
+            summary,
+        )
 
     @staticmethod
     def _activity_kind(name: str, arguments: dict[str, Any]) -> str:

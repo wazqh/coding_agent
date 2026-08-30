@@ -1,13 +1,15 @@
 from __future__ import annotations
 
 from collections.abc import Callable
+from contextlib import suppress
 from pathlib import Path
 from queue import Empty, Queue
 from threading import Event, Lock, Thread
-from typing import Protocol
+from typing import Protocol, cast
 
 from coding_agent.controller import RunResult
 from coding_agent.events import AgentEvent, EventKind
+from coding_agent.memory import MemoryStore
 from coding_agent.runtime_management import (
     CompactResult,
     LifecycleState,
@@ -19,8 +21,12 @@ from coding_agent.runtime_management import (
     SkillsSnapshot,
 )
 from coding_agent.safety.approval import ApprovalDecision, ApprovalRequest
+from coding_agent.safety.paths import WorkspacePaths
 from coding_agent.session import SessionStore
+from coding_agent.tools.base import AppliedChange, WorkingState
+from coding_agent.tools.filesystem import undo_change as undo_file_change
 from coding_agent.web.approval import ApprovalBroker
+from coding_agent.web.changes import legacy_diff_path, summarize_diff
 from coding_agent.web.completion import CompletionItem, query_completions
 from coding_agent.web.presenter import AgentEventPresenter
 from coding_agent.web.preview import WorkspacePreview
@@ -50,6 +56,7 @@ class _Runtime(Protocol):
 
 class _Working(Protocol):
     diffs: list[str]
+    changes: list[AppliedChange]
 
 
 class TurnCoordinator:
@@ -71,6 +78,7 @@ class TurnCoordinator:
         self._management: RuntimeManagement | None = None
         self._workspace: Path | None = None
         self._sessions: SessionStore | None = None
+        self._memory: MemoryStore | None = None
         self._preview: WorkspacePreview | None = None
         self._idle = Event()
         self._idle.set()
@@ -122,13 +130,24 @@ class TurnCoordinator:
                 "context_window": context_window,
             }
 
-    def configure_workspace_services(self, *, workspace: Path, sessions: SessionStore) -> None:
+    def configure_workspace_services(
+        self,
+        *,
+        workspace: Path,
+        sessions: SessionStore,
+        memory: MemoryStore | None = None,
+    ) -> None:
         """Attach bounded workspace/session projections used by the graphical frontend."""
 
         resolved = workspace.resolve(strict=True)
         with self._lock:
             self._workspace = resolved
             self._sessions = sessions
+            self._memory = memory or MemoryStore(
+                data_dir=sessions.directory.parent,
+                workspace=resolved,
+                enabled=False,
+            )
             self._preview = WorkspacePreview(resolved)
 
     def _require_runtime(self) -> _Runtime:
@@ -266,6 +285,25 @@ class TurnCoordinator:
             self._controller = self._require_runtime().create()
             return self._controller.session_id
 
+    def restore_startup_session(self) -> str | None:
+        """Restore the most recent useful session for this workspace on first initialize."""
+
+        with self._lock:
+            if self._controller is not None:
+                return None
+            if self._sessions is None or self._workspace is None:
+                return None
+            candidates = self._workspace_sessions(self._sessions, self._workspace)
+            if not candidates:
+                return None
+            selected = next(
+                (item for item in candidates if str(item.get("title", "")).strip()),
+                candidates[0],
+            )
+            session_id = str(selected["id"])
+            self._controller = self._require_runtime().create(session_id)
+            return self._controller.session_id
+
     def resume_session(self, session_id: str) -> str:
         with self._lock:
             if self._thread is not None:
@@ -279,6 +317,75 @@ class TurnCoordinator:
                     raise CoordinatorError("session does not belong to the current workspace")
             self._controller = self._require_runtime().create(session_id)
             return self._controller.session_id
+
+    def delete_session(self, session_id: str) -> dict[str, object]:
+        """Delete a workspace session and only the memories evidenced by that session."""
+
+        with self._lock:
+            if self._thread is not None:
+                raise CoordinatorBusyError("cannot delete sessions while a turn is running")
+            if self._sessions is None or self._workspace is None:
+                raise CoordinatorError("session storage is unavailable")
+            allowed = {
+                str(item["id"])
+                for item in self._workspace_sessions(self._sessions, self._workspace)
+            }
+            if session_id not in allowed:
+                raise CoordinatorError("session does not belong to the current workspace")
+            sessions = self._sessions
+            memory = self._memory
+            active = self._controller is not None and self._controller.session_id == session_id
+
+            replacement = None
+            if active:
+                try:
+                    replacement = self._require_runtime().create()
+                except Exception as exc:
+                    raise CoordinatorError(f"could not create replacement session: {exc}") from exc
+
+            def discard_replacement() -> None:
+                if replacement is None or replacement.session_id == session_id:
+                    return
+                with suppress(OSError, ValueError):
+                    sessions.delete(replacement.session_id)
+
+            try:
+                payload = sessions.delete(session_id)
+            except (OSError, ValueError) as exc:
+                discard_replacement()
+                raise CoordinatorError(f"could not delete session: {exc}") from exc
+            try:
+                deleted_memory_count = 0 if memory is None else memory.delete_by_session(session_id)
+            except (OSError, ValueError) as exc:
+                try:
+                    sessions.restore(session_id, payload)
+                except (OSError, ValueError) as rollback_exc:
+                    discard_replacement()
+                    raise CoordinatorError(
+                        f"could not delete session memory and rollback failed: {rollback_exc}"
+                    ) from exc
+                discard_replacement()
+                raise CoordinatorError(f"could not delete session memory: {exc}") from exc
+
+            replacement_session_id: str | None = None
+            if replacement is not None:
+                self._controller = replacement
+                replacement_session_id = replacement.session_id
+
+            memory_snapshot = None
+            if memory is not None:
+                memory_snapshot = {
+                    "enabled": memory.enabled,
+                    "items": [
+                        item.model_dump(mode="json") for item in memory.list(include_disabled=True)
+                    ],
+                }
+            return {
+                "deleted_session_id": session_id,
+                "deleted_memory_count": deleted_memory_count,
+                "replacement_session_id": replacement_session_id,
+                "memory": memory_snapshot,
+            }
 
     def start_turn(self, task: str) -> str:
         with self._lock:
@@ -460,39 +567,51 @@ class TurnCoordinator:
         with self._lock:
             controller = self._controller
             diffs = list(controller.working.diffs) if controller is not None else []
+            recorded = list(getattr(controller.working, "changes", [])) if controller else []
+        if recorded:
+            return [
+                {
+                    **summarize_diff(
+                        change_id=change.id,
+                        path=change.path,
+                        kind=change.kind,
+                        diff=change.diff,
+                    ),
+                    "reversible": change.reversible,
+                }
+                for change in recorded
+            ]
         changes: list[dict[str, object]] = []
         for index, diff in enumerate(diffs, start=1):
-            old_path: str | None = None
-            new_path: str | None = None
-            additions = 0
-            deletions = 0
-            in_hunk = False
-            for line in diff.splitlines():
-                if line.startswith("@@"):
-                    in_hunk = True
-                elif not in_hunk and line.startswith("--- "):
-                    candidate = line[4:].split("\t", 1)[0]
-                    if candidate != "/dev/null":
-                        old_path = candidate[2:] if candidate.startswith("a/") else candidate
-                elif not in_hunk and line.startswith("+++ "):
-                    candidate = line[4:].split("\t", 1)[0]
-                    if candidate != "/dev/null":
-                        new_path = candidate[2:] if candidate.startswith("b/") else candidate
-                elif in_hunk and line.startswith("+"):
-                    additions += 1
-                elif in_hunk and line.startswith("-"):
-                    deletions += 1
-            path = new_path or old_path or "unknown"
-            changes.append(
-                {
-                    "id": f"change-{index}",
-                    "path": path,
-                    "additions": additions,
-                    "deletions": deletions,
-                    "diff": diff,
-                }
+            summary = summarize_diff(
+                change_id=f"change-{index}",
+                path=legacy_diff_path(diff),
+                kind="modified",
+                diff=diff,
             )
+            summary.pop("kind", None)
+            changes.append(summary)
         return changes
+
+    def undo_change(self, change_id: str) -> dict[str, object]:
+        with self._lock:
+            if self._thread is not None:
+                raise CoordinatorBusyError("cannot undo while a turn is running")
+            controller = self._controller
+            workspace = self._workspace
+        if controller is None or workspace is None:
+            raise CoordinatorError("change history is unavailable")
+        change = undo_file_change(
+            cast(WorkingState, controller.working),
+            WorkspacePaths(workspace),
+            change_id,
+        )
+        return summarize_diff(
+            change_id=change.id,
+            path=change.path,
+            kind=change.kind,
+            diff=change.diff,
+        )
 
     @staticmethod
     def _workspace_sessions(sessions: SessionStore, workspace: Path) -> list[dict[str, object]]:

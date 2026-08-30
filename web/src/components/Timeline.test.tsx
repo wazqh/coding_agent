@@ -59,6 +59,38 @@ test("renders user, compact activity, expanded markdown, and blocks remote image
   expect(screen.getByRole("button", { name: "允许一次" })).toBeInTheDocument();
 });
 
+test("uses separate user and agent lanes with one grouped execution trace", () => {
+  const laneItems: TimelineItem[] = [
+    { id: "lane-user", kind: "user", content: "update the README" },
+    {
+      id: "lane-plan",
+      kind: "plan",
+      steps: [{ step: "Read the file", status: "in_progress" }],
+    },
+    items[1],
+    { id: "lane-assistant", kind: "assistant", content: "Done.", streaming: false },
+  ];
+  const view = render(<Timeline items={laneItems} onApproval={() => true} />);
+
+  expect(screen.getByText("update the README").closest("article")).toHaveClass("user-turn");
+  expect(screen.getByText("Done.").closest("article")).toHaveClass("assistant-turn");
+  const trace = view.container.querySelector(".execution-trace");
+  expect(trace).toContainElement(screen.getByRole("button", { name: /计划未闭环/ }));
+  expect(trace).toContainElement(screen.getByText("检查工作区").closest(".activity-row"));
+  expect(view.container.querySelector(".section-rule")).toBeNull();
+});
+
+test("renders complete tool details as labeled fields without raw JSON", async () => {
+  const user = userEvent.setup();
+  const view = render(<Timeline items={[items[1]]} onApproval={() => true} showRaw />);
+
+  expect(screen.getByText("hidden")).toBeInTheDocument();
+  expect(screen.getByText("raw detail")).toBeInTheDocument();
+  expect(view.container.querySelector(".activity-detail")).toBeNull();
+  expect(view.container.textContent).not.toContain('{"hidden"');
+  await user.click(screen.getByRole("button", { name: /检查工作区/ }));
+});
+
 test("shows the current plan step and its neighboring steps while work is active", () => {
   const plan: TimelineItem[] = [
     {
@@ -128,7 +160,8 @@ test("renders live work progress at the end of the execution timeline", () => {
   expect(feed.lastElementChild).toBe(progress);
 });
 
-test("keeps every completed plan step visible in execution order", () => {
+test("collapses a completed plan to its summary until the user expands it", async () => {
+  const user = userEvent.setup();
   const plan: TimelineItem[] = [
     {
       id: "plan-complete",
@@ -142,14 +175,16 @@ test("keeps every completed plan step visible in execution order", () => {
   ];
   render(<Timeline items={plan} onApproval={() => true} />);
 
+  expect(screen.getByText("共 3 步")).toBeInTheDocument();
+  const summary = screen.getByRole("button", { name: /计划已完成/ });
+  expect(summary).toHaveAttribute("aria-expanded", "false");
+  expect(screen.queryByText("检查工作区")).not.toBeInTheDocument();
+
+  await user.click(summary);
+
   expect(screen.getByText("检查工作区")).toBeInTheDocument();
   expect(screen.getByText("修改实现")).toBeInTheDocument();
   expect(screen.getByText("运行测试")).toBeInTheDocument();
-  expect(screen.getByText("共 3 步")).toBeInTheDocument();
-  expect(screen.getByRole("button", { name: /计划已完成/ })).toHaveAttribute(
-    "aria-expanded",
-    "true",
-  );
 });
 
 test("shows grouped workspace actions as an ordered execution trace", () => {
@@ -221,11 +256,29 @@ test("shows an inline diff before approving a proposed file edit", async () => {
       diff: "--- a/demo.py\n+++ b/demo.py\n@@ -1 +1 @@\n-old\n+new\n",
     } as TimelineItem,
   ];
-  render(<Timeline items={approvalWithDiff} onApproval={() => true} />);
+  const view = render(<Timeline items={approvalWithDiff} onApproval={() => true} />);
 
   expect(screen.queryByText("+new")).not.toBeInTheDocument();
   await user.click(screen.getByRole("button", { name: "查看拟议变更" }));
-  expect(screen.getByText(/\+new/)).toBeInTheDocument();
+  expect(screen.getByText("new")).toBeInTheDocument();
+  expect(view.container.querySelector(".diff-code-insert")).not.toBeNull();
+  expect(view.container.querySelector(".diff-code-delete")).not.toBeNull();
+});
+
+test.each([
+  ["allow_once", "已允许一次"],
+  ["allow_session", "本会话已允许"],
+  ["deny", "已拒绝"],
+])("localizes a resolved approval decision %s", (decision, label) => {
+  const resolvedItems: TimelineItem[] = [
+    { ...items[4], resolved: true, decision } as TimelineItem,
+  ];
+
+  render(<Timeline items={resolvedItems} onApproval={() => true} />);
+
+  expect(screen.queryByText("需要批准")).not.toBeInTheDocument();
+  expect(screen.getByText(label)).toBeInTheDocument();
+  expect(screen.queryByText(decision)).not.toBeInTheDocument();
 });
 
 test("keeps approval controls active when transport rejects the request", async () => {
@@ -255,7 +308,7 @@ test("keeps a backend-cancelled approval permanently resolved after reconnect", 
   view.rerender(<Timeline items={resolvedItems} onApproval={onApproval} approvalAvailable />);
 
   expect(screen.queryByRole("button", { name: "允许一次" })).not.toBeInTheDocument();
-  expect(screen.getByText("已处理 · cancelled")).toBeInTheDocument();
+  expect(screen.getByText("已取消")).toBeInTheDocument();
 });
 
 test("keeps unverified completion neutral and reserves success language for real validation", () => {
@@ -335,6 +388,35 @@ test("failed validation output is expandable", async () => {
 
   await user.click(screen.getByRole("button", { name: "展开失败输出" }));
   expect(screen.getByText(/AssertionError: expected 2/)).toBeInTheDocument();
+});
+
+test("shows a blocked command as a readable safety explanation instead of raw JSON", async () => {
+  const user = userEvent.setup();
+  const blocked: TimelineItem[] = [
+    {
+      id: "command-blocked",
+      kind: "activity",
+      activityId: "command:blocked",
+      activityKind: "command",
+      title: "运行命令",
+      summary: "command matches a destructive safety rule",
+      status: "failed",
+      detail: {
+        ok: false,
+        code: "DANGEROUS_COMMAND",
+        summary: "command matches a destructive safety rule",
+        data: { command: "git clean -fd", hard_blocked: true },
+      },
+    },
+  ];
+  const view = render(<Timeline items={blocked} onApproval={() => true} />);
+
+  await user.click(screen.getByRole("button", { name: /运行命令/ }));
+
+  expect(screen.getByText("git clean -fd")).toBeInTheDocument();
+  expect(screen.getByText("安全策略已阻止")).toBeInTheDocument();
+  expect(screen.getByText(/不能在图形界面中覆盖/)).toBeInTheDocument();
+  expect(view.container.querySelector(".activity-detail")).toBeNull();
 });
 
 test("asks before opening an external link", async () => {

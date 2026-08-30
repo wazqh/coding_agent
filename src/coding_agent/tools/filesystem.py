@@ -2,17 +2,21 @@ from __future__ import annotations
 
 import difflib
 import re
+from contextlib import suppress
 from pathlib import Path
+from typing import Literal
 
 from pydantic import BaseModel, Field
 
 from coding_agent.events import ToolResult
 from coding_agent.safety.approval import ApprovalRequest
-from coding_agent.safety.paths import atomic_write_text, sha256_file, sha256_text
-from coding_agent.tools.base import Tool, ToolContext
+from coding_agent.safety.paths import WorkspacePaths, atomic_write_text, sha256_file, sha256_text
+from coding_agent.tools.base import AppliedChange, Tool, ToolContext, WorkingState
 
 MAX_TEXT_CHARS = 2 * 1024 * 1024
 MAX_DIFF_CHARS = 32 * 1024
+MAX_CHANGE_HISTORY = 100
+MAX_UNDO_BACKUP_CHARS = 8 * 1024 * 1024
 
 
 def _read_text(path: Path) -> str:
@@ -41,6 +45,77 @@ def _diff(path: str, before: str, after: str) -> tuple[str, bool]:
         return value, False
     half = MAX_DIFF_CHARS // 2
     return value[:half] + "\n... diff truncated ...\n" + value[-half:], True
+
+
+def _record_change(
+    context: ToolContext,
+    *,
+    path: str,
+    kind: Literal["created", "modified"],
+    before_text: str | None,
+    after_sha256: str,
+    diff: str,
+    reversible: bool,
+) -> AppliedChange:
+    change = AppliedChange(
+        path=path,
+        kind=kind,
+        before_text=before_text,
+        after_sha256=after_sha256,
+        diff=diff,
+        reversible=reversible,
+    )
+    context.working.changes.append(change)
+    context.working.diffs.append(diff)
+    while len(context.working.changes) > MAX_CHANGE_HISTORY:
+        expired = context.working.changes.pop(0)
+        with suppress(ValueError):
+            context.working.diffs.remove(expired.diff)
+    backup_chars = sum(len(item.before_text or "") for item in context.working.changes)
+    if backup_chars > MAX_UNDO_BACKUP_CHARS:
+        for item in context.working.changes:
+            if backup_chars <= MAX_UNDO_BACKUP_CHARS:
+                break
+            if item.before_text is None:
+                continue
+            backup_chars -= len(item.before_text)
+            item.before_text = None
+            item.reversible = False
+    return change
+
+
+def undo_change(
+    working: WorkingState,
+    workspace: WorkspacePaths,
+    change_id: str,
+) -> AppliedChange:
+    """Undo one recorded Diff only when the workspace still matches its after-state."""
+
+    change = next((item for item in working.changes if item.id == change_id), None)
+    if change is None:
+        raise ValueError("this Diff is no longer available")
+    if not change.reversible:
+        raise ValueError("this Diff was truncated and cannot be safely undone")
+    path = workspace.resolve(change.path, must_exist=True, file_only=True)
+    if sha256_file(path) != change.after_sha256:
+        raise ValueError("file changed since this Diff was recorded")
+    if change.kind == "created":
+        path.unlink()
+    else:
+        atomic_write_text(path, change.before_text or "")
+
+    working.changes = [item for item in working.changes if item.id != change.id]
+    with suppress(ValueError):
+        working.diffs.remove(change.diff)
+    latest = next(
+        (item for item in reversed(working.changes) if item.path == change.path),
+        None,
+    )
+    if latest is None:
+        working.modified_files.pop(change.path, None)
+    else:
+        working.modified_files[change.path] = latest.after_sha256
+    return change
 
 
 class ListFilesArgs(BaseModel):
@@ -235,12 +310,27 @@ class EditFileTool(Tool):
         atomic_write_text(path, after)
         new_hash = sha256_text(after)
         context.working.modified_files[values.path] = new_hash
-        context.working.diffs.append(patch)
+        change = _record_change(
+            context,
+            path=values.path,
+            kind="modified",
+            before_text=before,
+            after_sha256=new_hash,
+            diff=patch,
+            reversible=not truncated,
+        )
         return ToolResult(
             ok=True,
             code="OK",
             summary=f"updated {values.path}",
-            data={"path": values.path, "sha256": new_hash, "diff": patch},
+            data={
+                "path": values.path,
+                "sha256": new_hash,
+                "diff": patch,
+                "change_id": change.id,
+                "change_kind": change.kind,
+                "reversible": change.reversible,
+            },
             truncated=truncated,
         )
 
@@ -310,11 +400,26 @@ class WriteFileTool(Tool):
         atomic_write_text(path, values.content)
         new_hash = sha256_text(values.content)
         context.working.modified_files[values.path] = new_hash
-        context.working.diffs.append(patch)
+        change = _record_change(
+            context,
+            path=values.path,
+            kind="modified" if exists else "created",
+            before_text=before if exists else None,
+            after_sha256=new_hash,
+            diff=patch,
+            reversible=not truncated,
+        )
         return ToolResult(
             ok=True,
             code="OK",
             summary=(f"overwrote {values.path}" if exists else f"created {values.path}"),
-            data={"path": values.path, "sha256": new_hash, "diff": patch},
+            data={
+                "path": values.path,
+                "sha256": new_hash,
+                "diff": patch,
+                "change_id": change.id,
+                "change_kind": change.kind,
+                "reversible": change.reversible,
+            },
             truncated=truncated,
         )

@@ -11,6 +11,7 @@ from coding_agent.events import ToolResult
 from coding_agent.safety.approval import ApprovalDecision, ApprovalPolicy
 from coding_agent.safety.commands import CommandPolicy, run_subprocess, sanitized_environment
 from coding_agent.safety.paths import PathSafetyError, WorkspacePaths, sha256_file
+from coding_agent.tools import filesystem as filesystem_tools
 from coding_agent.tools.base import ToolContext, WorkingState
 from coding_agent.tools.registry import default_registry
 
@@ -89,6 +90,113 @@ def test_read_edit_write_hash_and_approval(tmp_path: Path) -> None:
     created = registry.execute("write_file", {"path": "new.txt", "content": "new"}, ctx)
     assert created.ok and (tmp_path / "new.txt").read_text(encoding="utf-8") == "new"
     assert ctx.working.diffs
+
+
+def test_created_file_change_is_recorded_and_can_undo_the_visible_diff(tmp_path: Path) -> None:
+    ctx = context(tmp_path)
+    result = default_registry().execute(
+        "write_file",
+        {"path": "created.txt", "content": "created by agent\n"},
+        ctx,
+    )
+
+    assert result.ok
+    assert result.data["change_kind"] == "created"
+    assert len(ctx.working.changes) == 1
+    assert ctx.working.changes[0].diff == result.data["diff"]
+    undo_change = getattr(filesystem_tools, "undo_change", None)
+    assert callable(undo_change)
+
+    undone = undo_change(ctx.working, ctx.workspace, result.data["change_id"])
+
+    assert undone.path == "created.txt"
+    assert not (tmp_path / "created.txt").exists()
+    assert ctx.working.changes == []
+    assert ctx.working.diffs == []
+
+
+def test_undo_rejects_a_stale_diff_without_overwriting_newer_content(tmp_path: Path) -> None:
+    path = tmp_path / "demo.py"
+    path.write_text("value = 1\n", encoding="utf-8")
+    ctx = context(tmp_path)
+    registry = default_registry()
+    first = registry.execute(
+        "edit_file",
+        {
+            "path": "demo.py",
+            "old_text": "1",
+            "new_text": "2",
+            "expected_sha256": sha256_file(path),
+        },
+        ctx,
+    )
+    second = registry.execute(
+        "edit_file",
+        {
+            "path": "demo.py",
+            "old_text": "2",
+            "new_text": "3",
+            "expected_sha256": sha256_file(path),
+        },
+        ctx,
+    )
+    undo_change = getattr(filesystem_tools, "undo_change", None)
+    assert callable(undo_change)
+
+    with pytest.raises(ValueError, match="changed since this Diff was recorded"):
+        undo_change(ctx.working, ctx.workspace, first.data["change_id"])
+    assert path.read_text(encoding="utf-8") == "value = 3\n"
+
+    undo_change(ctx.working, ctx.workspace, second.data["change_id"])
+    undo_change(ctx.working, ctx.workspace, first.data["change_id"])
+    assert path.read_text(encoding="utf-8") == "value = 1\n"
+
+
+def test_undo_is_disabled_when_the_reviewed_diff_was_truncated(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(filesystem_tools, "MAX_DIFF_CHARS", 80)
+    ctx = context(tmp_path)
+    result = default_registry().execute(
+        "write_file",
+        {"path": "large.txt", "content": "\n".join(f"line {index}" for index in range(100))},
+        ctx,
+    )
+
+    assert result.ok and result.truncated
+    assert ctx.working.changes[0].reversible is False
+    with pytest.raises(ValueError, match="truncated"):
+        filesystem_tools.undo_change(ctx.working, ctx.workspace, result.data["change_id"])
+    assert (tmp_path / "large.txt").is_file()
+
+
+def test_change_history_bounds_undo_backups_and_visible_diffs(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(filesystem_tools, "MAX_CHANGE_HISTORY", 2)
+    monkeypatch.setattr(filesystem_tools, "MAX_UNDO_BACKUP_CHARS", 5)
+    path = tmp_path / "bounded.txt"
+    path.write_text("first value\n", encoding="utf-8")
+    ctx = context(tmp_path)
+    registry = default_registry()
+
+    for old, new in [("first", "second"), ("second", "third"), ("third", "fourth")]:
+        result = registry.execute(
+            "edit_file",
+            {
+                "path": "bounded.txt",
+                "old_text": old,
+                "new_text": new,
+                "expected_sha256": sha256_file(path),
+            },
+            ctx,
+        )
+        assert result.ok
+
+    assert len(ctx.working.changes) == 2
+    assert len(ctx.working.diffs) == 2
+    assert all(change.before_text is None for change in ctx.working.changes)
+    assert all(change.reversible is False for change in ctx.working.changes)
 
 
 def test_unique_match_and_noninteractive_denial(tmp_path: Path) -> None:
@@ -217,6 +325,10 @@ def test_command_timeout_output_bound_and_tool_rejection(tmp_path: Path) -> None
         context(tmp_path),
     )
     assert denied.code == "DANGEROUS_COMMAND"
+    assert denied.data == {
+        "command": "git clean -fd",
+        "hard_blocked": True,
+    }
 
 
 def test_list_and_search_are_bounded_to_workspace(tmp_path: Path) -> None:

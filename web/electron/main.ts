@@ -238,7 +238,7 @@ async function createMainWindow(): Promise<void> {
     titleBarOverlay: {
       color: "#eef2f7",
       symbolColor: "#5f6670",
-      height: 38,
+      height: 30,
     },
     webPreferences: {
       preload: preloadPath,

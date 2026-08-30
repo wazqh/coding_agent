@@ -27,6 +27,8 @@ export interface SessionSummary {
 export interface ChangeSummary {
   id: string;
   path: string;
+  kind?: "created" | "modified";
+  reversible?: boolean;
   additions: number;
   deletions: number;
   diff: string;
@@ -583,6 +585,23 @@ export function createAgentStore() {
           };
         }
 
+        if (event.type === "change.recorded") {
+          const change: ChangeSummary = {
+            id: text(event.data.id),
+            path: text(event.data.path),
+            kind: text(event.data.kind) === "created" ? "created" : "modified",
+            reversible: event.data.reversible !== false,
+            additions: Number(event.data.additions ?? 0),
+            deletions: Number(event.data.deletions ?? 0),
+            diff: text(event.data.diff),
+          };
+          const existing = state.changes.findIndex((item) => item.id === change.id);
+          if (existing < 0) return { ...base, changes: [...state.changes, change] };
+          const changes = [...state.changes];
+          changes[existing] = change;
+          return { ...base, changes };
+        }
+
         if (event.type === "changes.updated") {
           const changes = Array.isArray(event.data.changes)
             ? event.data.changes.map((value) => {
@@ -590,6 +609,8 @@ export function createAgentStore() {
                 return {
                   id: text(item.id),
                   path: text(item.path),
+                  kind: text(item.kind) === "created" ? "created" as const : "modified" as const,
+                  reversible: item.reversible === true,
                   additions: Number(item.additions ?? 0),
                   deletions: Number(item.deletions ?? 0),
                   diff: text(item.diff),

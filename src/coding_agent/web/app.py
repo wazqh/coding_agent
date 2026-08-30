@@ -18,6 +18,7 @@ from coding_agent.web.preview import PreviewError
 from coding_agent.web.protocol import (
     ApprovalResolveRequest,
     ChangesListRequest,
+    ChangeUndoRequest,
     CompletionQueryRequest,
     ConfigGetRequest,
     ContextCompactRequest,
@@ -38,6 +39,7 @@ from coding_agent.web.protocol import (
     PlanGetRequest,
     RuntimeStatusRequest,
     SessionCreateRequest,
+    SessionDeleteRequest,
     SessionListRequest,
     SessionResumeRequest,
     SkillsListRequest,
@@ -176,7 +178,31 @@ def _dispatch_request(coordinator: TurnCoordinator, request: object) -> None:
         coordinator.publish_snapshot(replace_timeline=True)
         coordinator.publish_history(session_id)
         return
-    if isinstance(request, (InitializeRequest, SessionListRequest)):
+    if isinstance(request, SessionDeleteRequest):
+        delete_result = coordinator.delete_session(request.session_id)
+        coordinator.publish_snapshot(
+            replace_timeline=delete_result["replacement_session_id"] is not None
+        )
+        memory = delete_result.get("memory")
+        if isinstance(memory, dict):
+            coordinator.emit(ViewEventType.MEMORY_UPDATED, {"memory": memory})
+        coordinator.emit(
+            ViewEventType.COMMAND_COMPLETED,
+            {
+                "command": request.type,
+                "status": "completed",
+                "deleted_session_id": request.session_id,
+                "deleted_memory_count": delete_result["deleted_memory_count"],
+            },
+        )
+        return
+    if isinstance(request, InitializeRequest):
+        restored_session = coordinator.restore_startup_session()
+        coordinator.publish_snapshot(replace_timeline=restored_session is not None)
+        if restored_session is not None:
+            coordinator.publish_history(restored_session)
+        return
+    if isinstance(request, SessionListRequest):
         coordinator.publish_snapshot()
         return
     if isinstance(request, ApprovalResolveRequest):
@@ -210,6 +236,40 @@ def _dispatch_request(coordinator: TurnCoordinator, request: object) -> None:
         coordinator.emit(
             ViewEventType.CHANGES_UPDATED,
             {"changes": coordinator.list_changes()},
+        )
+        return
+    if isinstance(request, ChangeUndoRequest):
+        try:
+            change = coordinator.undo_change(request.change_id)
+        except (CoordinatorError, OSError, ValueError) as exc:
+            message = str(exc)
+            if "changed since this Diff was recorded" in message:
+                message = "文件在该 Diff 之后已被修改，无法安全撤销。"
+            elif "no longer available" in message:
+                message = "这条 Diff 已撤销或不再可用。"
+            coordinator.emit(
+                ViewEventType.ERROR,
+                {
+                    "severity": "error",
+                    "message": message,
+                    "code": "CHANGE_UNDO_FAILED",
+                    "recoverable": True,
+                },
+            )
+            return
+        coordinator.emit(
+            ViewEventType.CHANGES_UPDATED,
+            {"changes": coordinator.list_changes()},
+        )
+        coordinator.emit(
+            ViewEventType.ACTIVITY_UPSERT,
+            {
+                "activity_id": f"undo:{request.change_id}",
+                "kind": "file_change",
+                "title": "撤销变更",
+                "status": "completed",
+                "summary": str(change["path"]),
+            },
         )
         return
     if isinstance(request, ConfigGetRequest):

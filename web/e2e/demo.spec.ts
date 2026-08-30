@@ -174,15 +174,18 @@ test("completes the polished two-minute demo path without page overflow", async 
   await expect(page.getByText("读取认证实现")).toBeVisible();
   await expect(page.getByText("需要批准")).toBeVisible();
   await page.getByRole("button", { name: "查看拟议变更" }).click();
-  await expect(page.getByText("+fixed = True")).toBeVisible();
+  await expect(page.getByText("fixed = True")).toBeVisible();
+  await expect(page.locator(".approval-diff-content .diff-code-insert")).toBeVisible();
   await page.getByRole("button", { name: "允许一次" }).click();
 
   await expect(page.getByText("已完成修复，并通过")).toBeVisible();
   await expect(page.getByText("完成 · 验证通过")).toBeVisible();
   await page.getByRole("button", { name: "任务检查器" }).click();
   await page.getByRole("tab", { name: "变更" }).click();
-  await expect(page.getByText("已记录 1 次改动")).toBeVisible();
-  await expect(page.getByRole("cell", { name: "fixed = True" })).toBeVisible();
+  await expect(page.getByText("Agent 修改 1 处")).toBeVisible();
+  await page.getByRole("button", { name: /src\/auth\.py/ }).click();
+  const inspector = page.getByRole("complementary", { name: "任务检查器" });
+  await expect(inspector.getByRole("cell", { name: "fixed = True" })).toBeVisible();
   await page.getByRole("button", { name: "查看文件" }).click();
   await expect(page.getByText("13 B")).toBeVisible();
 
@@ -200,4 +203,52 @@ test("completes the polished two-minute demo path without page overflow", async 
       () => document.documentElement.scrollWidth <= document.documentElement.clientWidth,
     ),
   ).toBe(true);
+});
+
+test("shows one composer focus treatment without an inner textarea outline", async ({ page }) => {
+  await installDemoRuntime(page);
+  await page.goto("/");
+
+  const input = page.getByRole("textbox", { name: "任务输入" });
+  await input.focus();
+
+  await expect(input).toBeFocused();
+  expect(await input.evaluate((element) => getComputedStyle(element).outlineStyle)).toBe("none");
+  await expect(input.locator("xpath=..")).toHaveCSS("border-top-style", "solid");
+});
+
+test("fills the inspector surface at overlay widths", async ({ page }) => {
+  await installDemoRuntime(page);
+  await page.setViewportSize({ width: 1240, height: 800 });
+  await page.goto("/");
+
+  await page.getByRole("button", { name: "任务检查器" }).click();
+  const drawer = page.locator(".context-drawer");
+  const content = page.locator(".drawer-content");
+  await expect(drawer).toBeVisible();
+
+  const remainingSpace = await drawer.evaluate((element) => {
+    const drawerBox = element.getBoundingClientRect();
+    const contentBox = element.querySelector(".drawer-content")!.getBoundingClientRect();
+    return Math.round(drawerBox.bottom - contentBox.bottom);
+  });
+  expect(remainingSpace).toBeLessThanOrEqual(2);
+  expect(await drawer.evaluate((element) => element.getBoundingClientRect().height)).toBeGreaterThanOrEqual(776);
+  await expect(content).toHaveCSS("overflow-y", "auto");
+});
+
+test("keeps collapsed conversations inside a centered readable width", async ({ page }) => {
+  await installDemoRuntime(page);
+  await page.goto("/");
+
+  await page.locator(".rail-collapse-button").click();
+  const composer = page.getByRole("textbox", { name: "任务输入" });
+  await composer.fill("check the workspace");
+  await composer.press("Enter");
+
+  await expect(page.locator(".timeline")).toBeVisible();
+  const timelineWidth = await page.locator(".timeline").evaluate(
+    (element) => element.getBoundingClientRect().width,
+  );
+  expect(timelineWidth).toBeLessThanOrEqual(1240);
 });

@@ -2,7 +2,8 @@ from __future__ import annotations
 
 from abc import ABC, abstractmethod
 from collections.abc import Callable
-from typing import TYPE_CHECKING, Any, ClassVar
+from typing import TYPE_CHECKING, Any, ClassVar, Literal
+from uuid import uuid4
 
 from pydantic import BaseModel, Field
 
@@ -14,6 +15,16 @@ if TYPE_CHECKING:
     from coding_agent.skills import SkillRegistry
 
 
+class AppliedChange(BaseModel):
+    id: str = Field(default_factory=lambda: uuid4().hex)
+    path: str
+    kind: Literal["created", "modified"]
+    diff: str
+    before_text: str | None = Field(default=None, exclude=True, repr=False)
+    after_sha256: str
+    reversible: bool = True
+
+
 class WorkingState(BaseModel):
     goal: str = ""
     plan: list[dict[str, str]] = Field(default_factory=list)
@@ -22,6 +33,7 @@ class WorkingState(BaseModel):
     modified_files: dict[str, str] = Field(default_factory=dict)
     active_skills: list[str] = Field(default_factory=list)
     diffs: list[str] = Field(default_factory=list)
+    changes: list[AppliedChange] = Field(default_factory=list, exclude=True)
 
 
 EventSink = Callable[[AgentEvent], None]

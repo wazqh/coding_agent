@@ -32,6 +32,7 @@ class RunCommandTool(Tool):
                 ok=False,
                 code="DANGEROUS_COMMAND",
                 summary=classification.reason,
+                data={"command": values.command, "hard_blocked": True},
             )
         if classification.approval_required and not context.approve(
             ApprovalRequest(

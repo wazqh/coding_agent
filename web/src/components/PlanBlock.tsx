@@ -13,15 +13,15 @@ function stepLabel(step: Record<string, unknown>): string {
 
 export function PlanBlock({ steps, active = false }: PlanBlockProps) {
   const statusSignature = steps.map((step) => String(step.status)).join("|");
-  const [expanded, setExpanded] = useState(steps.length > 0);
   const completed = steps.filter((step) => step.status === "completed").length;
+  const complete = completed === steps.length && steps.length > 0;
+  const [expanded, setExpanded] = useState(active || !complete);
   const current =
     steps.find((step) => step.status === "in_progress") ??
     steps.find((step) => step.status !== "completed") ??
     steps.at(-1);
   const currentIndex = Math.max(0, steps.indexOf(current ?? steps[0]));
   const currentLabel = current ? stepLabel(current) : "等待 Agent 更新计划";
-  const complete = completed === steps.length && steps.length > 0;
   const title = complete ? "计划已完成" : active ? "正在按计划执行" : "计划未闭环";
   const detail = complete
     ? `共 ${steps.length} 步`
@@ -32,8 +32,8 @@ export function PlanBlock({ steps, active = false }: PlanBlockProps) {
         : `共 ${steps.length} 步 · 尚未开始`;
 
   useEffect(() => {
-    if (steps.length > 0) setExpanded(true);
-  }, [statusSignature, steps.length]);
+    if (steps.length > 0) setExpanded(active || !complete);
+  }, [active, complete, statusSignature, steps.length]);
 
   return (
     <section className={`plan-block ${active ? "is-active" : "is-history"}`}>

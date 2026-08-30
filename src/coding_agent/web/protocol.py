@@ -37,6 +37,11 @@ class SessionResumeRequest(RequestFrame):
     session_id: str = Field(pattern=SESSION_PATTERN)
 
 
+class SessionDeleteRequest(RequestFrame):
+    type: Literal["session.delete"]
+    session_id: str = Field(pattern=SESSION_PATTERN)
+
+
 class TurnStartRequest(RequestFrame):
     type: Literal["turn.start"]
     task: str = Field(min_length=1, max_length=100_000)
@@ -59,6 +64,11 @@ class FilePreviewRequest(RequestFrame):
 
 class ChangesListRequest(RequestFrame):
     type: Literal["changes.list"]
+
+
+class ChangeUndoRequest(RequestFrame):
+    type: Literal["change.undo"]
+    change_id: str = Field(pattern=r"^[0-9a-f]{32}$")
 
 
 class ConfigGetRequest(RequestFrame):
@@ -175,11 +185,13 @@ ClientRequest: TypeAlias = Annotated[
     | SessionListRequest
     | SessionCreateRequest
     | SessionResumeRequest
+    | SessionDeleteRequest
     | TurnStartRequest
     | TurnCancelRequest
     | ApprovalResolveRequest
     | FilePreviewRequest
     | ChangesListRequest
+    | ChangeUndoRequest
     | ConfigGetRequest
     | RuntimeStatusRequest
     | StepsGetRequest

@@ -59,6 +59,14 @@ function isChangeSummary(value: unknown): boolean {
   );
 }
 
+function isLiveChange(value: Record<string, unknown>): boolean {
+  return (
+    isChangeSummary(value) &&
+    ["created", "modified"].includes(String(value.kind)) &&
+    /^[0-9a-f]{32}$/.test(String(value.id))
+  );
+}
+
 function isEventData(type: string, data: Record<string, unknown>): boolean {
   if (type === "snapshot") {
     const permission = data.permissions;
@@ -95,6 +103,7 @@ function isEventData(type: string, data: Record<string, unknown>): boolean {
     return hasStrings(data, ["approval_id", "decision"]);
   }
   if (type === "plan.updated") return Array.isArray(data.plan);
+  if (type === "change.recorded") return isLiveChange(data);
   if (type === "turn.finished") return typeof data.status === "string";
   if (type === "error") return hasStrings(data, ["severity", "message"]);
   if (type === "file.previewed") {
@@ -130,7 +139,7 @@ function isEventData(type: string, data: Record<string, unknown>): boolean {
   if (type === "memory.updated") return isRecord(data.memory);
   if (type === "skills.updated") return isRecord(data.skills);
   if (type === "context.compacted") return isRecord(data.result);
-  return type === "change.recorded" || type === "context.updated";
+  return type === "context.updated";
 }
 
 export function parseViewEvent(value: unknown): ViewEvent | null {
