@@ -74,6 +74,37 @@ def test_controller_automatic_compaction_and_usage(settings: Settings) -> None:
     )
 
 
+def test_controller_compacts_only_completed_turns_before_appending_new_user(
+    settings: Settings,
+) -> None:
+    settings.agent.context_window = 1
+    model = FakeModel(
+        [[ModelStreamEvent(type="text_delta", text="done"), ModelStreamEvent(type="done")]]
+    )
+    controller = make_controller(settings, model)
+    controller.conversation = [
+        {"role": "user", "content": f"request {index}"}
+        if index % 2 == 0
+        else {"role": "assistant", "content": f"answer {index}"}
+        for index in range(12)
+    ]
+    observed: list[list[dict[str, Any]]] = []
+    original_compact = controller.context.compact
+
+    def capture(
+        messages: list[dict[str, Any]], working: object
+    ) -> tuple[list[dict[str, Any]], str]:
+        observed.append([dict(message) for message in messages])
+        return original_compact(messages, working)  # type: ignore[arg-type]
+
+    controller.context.compact = capture  # type: ignore[method-assign]
+
+    controller.run_turn("new request")
+
+    assert observed
+    assert observed[0][-1]["content"] != "new request"
+
+
 def test_controller_restores_plan_and_available_skills(settings: Settings) -> None:
     skill_dir = settings.cwd / ".agents" / "skills" / "demo"
     skill_dir.mkdir(parents=True)

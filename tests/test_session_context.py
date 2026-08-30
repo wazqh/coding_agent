@@ -54,6 +54,41 @@ def test_context_compaction_preserves_recent_and_summary() -> None:
     assert estimate_tokens(compacted) > 0
 
 
+def test_context_compaction_handles_few_very_large_completed_turns() -> None:
+    large = "decision and implementation detail " * 800
+    messages: list[dict[str, object]] = [
+        {"role": "user", "content": f"first request {large}"},
+        {"role": "assistant", "content": f"first result {large}"},
+        {"role": "user", "content": f"second request {large}"},
+        {"role": "assistant", "content": f"second result {large}"},
+        {"role": "user", "content": "latest request"},
+        {"role": "assistant", "content": "latest result"},
+    ]
+
+    compacted, summary = ContextManager(context_window=128).compact(
+        messages, WorkingState(goal="latest request")
+    )
+
+    assert summary
+    assert len(compacted) < len(messages)
+    assert compacted[-2:] == messages[-2:]
+    assert "first request" in summary
+
+
+def test_context_compaction_does_not_compact_a_single_completed_turn() -> None:
+    messages: list[dict[str, object]] = [
+        {"role": "user", "content": "request " + ("x" * 10_000)},
+        {"role": "assistant", "content": "answer " + ("y" * 10_000)},
+    ]
+
+    compacted, summary = ContextManager(context_window=128).compact(
+        messages, WorkingState(goal="request")
+    )
+
+    assert compacted == messages
+    assert summary == ""
+
+
 def test_context_compaction_never_splits_active_tool_turn() -> None:
     signature_call = {
         "role": "assistant",

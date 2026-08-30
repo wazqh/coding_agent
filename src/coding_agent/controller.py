@@ -360,7 +360,6 @@ class AgentController:
         turn_id = uuid4().hex[:16]
         started = self.monotonic()
         self.working.goal = user_input
-        self._append_message({"role": "user", "content": user_input})
         explicit_skills = self._explicit_skills(user_input)
         memory_text = ""
         if self.memory is not None:
@@ -377,6 +376,36 @@ class AgentController:
             turn_id=turn_id,
         )
         self._last_system_prompt = system_prompt
+        tool_schemas = self.tools.schemas()
+        prospective_request = self._messages_for_model(
+            [
+                {"role": "system", "content": system_prompt},
+                *self.conversation,
+                {"role": "user", "content": user_input},
+            ]
+        )
+        self.last_context_tokens = estimate_request_tokens(prospective_request, tool_schemas)
+        if self.context.should_compact(prospective_request, tool_schemas):
+            before = self.last_context_tokens
+            compacted, summary = self.context.compact(self.conversation, self.working)
+            if summary:
+                self.conversation = compacted
+                self.sessions.append(
+                    self.session_id,
+                    "compact",
+                    {
+                        "summary": summary,
+                        "manual": False,
+                        "tokens_before": before,
+                        "conversation": self.conversation,
+                    },
+                )
+                self._emit(
+                    EventKind.COMPACT,
+                    turn_id=turn_id,
+                    data={"tokens_before": before, "summary": summary},
+                )
+        self._append_message({"role": "user", "content": user_input})
         steps = 0
         last_text = ""
         failed_signature: str | None = None
@@ -404,35 +433,6 @@ class AgentController:
                     ]
                 )
                 self.last_context_tokens = estimate_request_tokens(request_messages, tool_schemas)
-                if self.context.should_compact(request_messages, tool_schemas):
-                    before = self.last_context_tokens
-                    compacted, summary = self.context.compact(self.conversation, self.working)
-                    if summary:
-                        self.conversation = compacted
-                        self.sessions.append(
-                            self.session_id,
-                            "compact",
-                            {
-                                "summary": summary,
-                                "manual": False,
-                                "tokens_before": before,
-                                "conversation": self.conversation,
-                            },
-                        )
-                        self._emit(
-                            EventKind.COMPACT,
-                            turn_id=turn_id,
-                            data={"tokens_before": before, "summary": summary},
-                        )
-                        request_messages = self._messages_for_model(
-                            [
-                                {"role": "system", "content": system_prompt},
-                                *self.conversation,
-                            ]
-                        )
-                        self.last_context_tokens = estimate_request_tokens(
-                            request_messages, tool_schemas
-                        )
                 self._set_state(AgentState.THINKING, turn_id, step=steps)
                 content_parts: list[str] = []
                 tool_calls: list[ToolCall] = []

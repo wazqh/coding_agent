@@ -38,8 +38,6 @@ class ContextManager:
     def compact(
         self, messages: list[dict[str, Any]], working: WorkingState
     ) -> tuple[list[dict[str, Any]], str]:
-        if len(messages) <= 9:
-            return messages, ""
         system_count = 0
         while system_count < len(messages) and messages[system_count].get("role") == "system":
             system_count += 1
@@ -51,12 +49,13 @@ class ContextManager:
             for index in range(system_count, len(messages))
             if messages[index].get("role") == "user"
         ]
-        if not user_indices:
+        if len(user_indices) < 2:
             return messages, ""
         # A turn begins at a user message and includes every assistant/tool exchange
         # up to the next user message. Keep four complete turns rather than eight
         # arbitrary messages, which can split a Gemini function-call group.
-        recent_start = user_indices[-4] if len(user_indices) >= 4 else user_indices[0]
+        retained_turns = min(4, len(user_indices) - 1)
+        recent_start = user_indices[-retained_turns]
         recent = messages[recent_start:]
         older = messages[system_count:recent_start]
         if not older:
@@ -82,10 +81,15 @@ class ContextManager:
         pending = [item["step"] for item in working.plan if item.get("status") != "completed"]
         failures: list[str] = []
         evidence: list[str] = []
+        prior_turn_notes: list[str] = []
         for message in older:
-            if message.get("role") != "tool":
+            role = message.get("role")
+            content = str(message.get("content", "")).strip()
+            if role in {"user", "assistant"} and content:
+                normalized = " ".join(content.split())
+                prior_turn_notes.append(f"{role}: {normalized[:500]}")
+            if role != "tool":
                 continue
-            content = str(message.get("content", ""))
             if '"ok":false' in content.replace(" ", "").casefold():
                 failures.append(content[:300])
             if "passed" in content.casefold() or "exit_code" in content:
@@ -100,6 +104,7 @@ class ContextManager:
                 "Failed approaches: " + ("; ".join(failures[-4:]) or "none recorded"),
                 "Test evidence: " + ("; ".join(evidence[-4:]) or "none recorded"),
                 "Pending work: " + ("; ".join(pending) or "none recorded"),
+                "Prior turn notes: " + (" | ".join(prior_turn_notes[-8:]) or "none recorded"),
             ]
         )
         compacted = [{"role": "system", "content": summary}, *recent]
