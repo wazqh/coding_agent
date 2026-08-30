@@ -1,61 +1,57 @@
 # Delivery status and roadmap
 
-This file records the state of the implementation after the local Web frontend delivery. It
-separates implemented behavior from work that still needs fresh verification or product decisions.
+This file records the release state after the Electron desktop integration. Electron is the primary
+graphical frontend; the scrolling TUI remains a first-class fallback and automation surface. The
+loopback React gateway under `web/` is shared desktop infrastructure, not a separately promoted
+browser product.
 
 ## Implemented now
 
-- Local model-tool-observation loop with structured events, bounded retries, loop guards, plans,
-  workspace tools, and resumable JSONL sessions.
-- Workspace path confinement, hash-guarded atomic writes, visible unified diffs, explicit approval
-  choices, dangerous-command refusal, secret-stripped child environments, and process-tree
-  cancellation.
-- Scrolling prompt-toolkit and Rich interface with normal terminal history, narrow/no-color
-  rendering, slash/skill/file completion, live status, consistent block spacing, and Esc
-  cancellation.
-- Detailed slash-command help, session-scoped model and permission management, structured skill and
-  memory management, and an interactive recent-session picker with context preview.
-- Trusted scoped `AGENTS.md`, lazy repository/user `SKILL.md`, project-isolated approved memory,
-  deterministic compaction, and request-only repair of interrupted provider histories.
-- OpenAI-compatible streaming plus Gemini function-call compatibility, including durable thought
-  signatures and complete-request token estimates that include tool schemas.
-- Optional localhost React Web UI using the shared controller/runtime, authenticated single-client
-  WebSocket, semantic event presenter, responsive session rail, compact timeline, inline approvals,
-  safe file preview, and read-only Diff inspection.
-- Bundled Noto Sans SC and JetBrains Mono, wheel-contained hashed production assets, Vitest coverage,
-  and a mocked Playwright demo path at both 1024×700 and 1920×1080.
+- Local model-tool-observation loop with structured events, bounded retries, loop guards, visible
+  plans, workspace tools, configurable 12–100 step budgets, and resumable JSONL sessions.
+- Workspace confinement, hash-guarded atomic writes, visible unified diffs, three-way approvals,
+  dangerous-command refusal, secret-stripped child environments, and process-tree cancellation.
+- Scrolling prompt-toolkit/Rich interface with normal terminal history, narrow and `NO_COLOR`
+  rendering, slash/skill/file completion, live status, and Esc cancellation.
+- OpenAI-compatible provider catalog and project-scoped model/permission/step settings, plus Gemini
+  function-call compatibility with durable thought signatures.
+- Electron main process that supervises the local Python runtime, keeps the renderer sandboxed,
+  enforces navigation policy, owns workspace/trust dialogs, and handles credentials outside React
+  and the WebSocket protocol.
+- React desktop workspace with project-organized sessions, collapsible navigation, activity and plan
+  timelines, streaming Markdown, inline approval/Diff review, task inspector, bounded file preview,
+  `/`/`@`/`$` completion, session controls, Skills, Memory, context, permissions, steps, and provider
+  onboarding.
+- Bundled Noto Sans SC and JetBrains Mono, hashed wheel-contained renderer assets, Python/Vitest
+  regression coverage, and a mocked renderer acceptance path at 1024×700 and 1920×1080 on Windows
+  and Linux.
 
 ## Required follow-up
 
-1. Confirm the pushed workflow on Ubuntu and Windows for Python 3.11 and 3.12, then fix only failures
-   that reproduce against the current commit. Recheck a native Windows isolated build; the current
-   machine reproduces a `python-build` UTF-8 decode failure while installing Hatchling, while
-   `python -m build --no-isolation` successfully builds both distributions.
+1. Keep the pushed Ubuntu/Windows, Python 3.11/3.12 and desktop renderer workflow green; package a
+   reproducible desktop installer only after the current source delivery is stable.
 2. Run the five-task real-model evaluation three times per task in disposable repositories and
-   record pass rate, tool success, correction count, tokens, latency, memory pollution, unexpected
-   skill activation, and safety leakage. Do not commit generated reports.
-3. Perform a clean-clone wheel installation and manual 80-column, `NO_COLOR`, approval, cancellation,
-   resume, compact, memory, and skill acceptance pass; repeat the real Web flow on the release
-   candidate with a configured compatible provider.
-4. Record the two-minute Web demonstration from the exact release candidate, complete documentation
-   QA, and create the release tag only after CI and acceptance evidence are green.
+   retain pass rate, tool success, corrections, tokens, latency, memory pollution, skill activation,
+   and safety evidence outside Git.
+3. Perform clean-clone acceptance for TUI and Electron: trust, model onboarding, approval choices,
+   cancellation, resume, compact, Memory, Skills, file preview, Diff review, and narrow-window use.
+4. Record the two-minute Electron demonstration from the exact release candidate and tag only the
+   commit whose CI and manual acceptance evidence are green.
 
 ## Optional product work
 
-- Add an **adaptive reasoning budget** policy instead of one hard-coded reasoning setting. It should
-  choose a provider-supported effort or token budget from task complexity, tool failures, remaining
-  context, and latency/cost limits; expose the selected policy and allow a user override.
-- Keep this control model-agnostic and degrade to a configurable static default when an endpoint has
-  no reasoning control. Never request, persist, or render private chain-of-thought; the feature
-  controls reasoning effort, not disclosure of hidden reasoning.
-- Consider richer session filtering, aggregated per-file change history, diff navigation for large
-  changes, settings panels, and measured TUI theme variants only after required acceptance work.
+- Add adaptive, provider-aware reasoning effort without requesting, persisting, or rendering hidden
+  chain-of-thought.
+- Add measured startup and bundle-size work, large-Diff virtualization, richer session search, and
+  OS-specific installer/signing pipelines after functional acceptance.
+- Add true Electron-level smoke automation in addition to the existing sandboxed main/preload unit
+  tests and browser-driven renderer acceptance path.
 - Harden cancellation event ordering and Windows junction/symlink-swap preview races after the
   current bounded read-only preview path has shipped.
 
 ## Explicitly out of scope for 1.0
 
-Plugin marketplace, MCP, multi-agent orchestration, RAG, hosted execution, remote file services, a
-browser code editor, and a packaged desktop shell remain excluded unless product scope is
-deliberately revised. A future Tauri/WebView wrapper may reuse the React renderer without moving
-controller or filesystem authority into JavaScript.
+Plugin marketplaces, MCP, multi-agent orchestration, RAG, hosted execution, remote file services,
+and a browser code editor remain excluded. A standalone hosted or LAN Web product is deferred; any
+future proposal must preserve the same local authority and approval boundary instead of exposing the
+desktop gateway remotely.

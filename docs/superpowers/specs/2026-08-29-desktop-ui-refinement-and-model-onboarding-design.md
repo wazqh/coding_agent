@@ -1,5 +1,10 @@
 # Desktop UI Refinement and Model Onboarding Design
 
+## Status
+
+Implemented and integrated on 2026-08-30. This document remains the design rationale; current
+startup and verification commands live in the repository README.
+
 ## Scope
 
 This module refines the existing Electron V2 frontend without changing the local Python agent loop. It fixes keyboard completion, organizes sessions under projects, makes the inspector entry truthful, enriches execution receipts, and adds a secure `/model` onboarding flow.

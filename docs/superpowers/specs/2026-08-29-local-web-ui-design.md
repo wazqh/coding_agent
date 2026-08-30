@@ -2,8 +2,9 @@
 
 ## Status
 
-Approved on 2026-08-29. This document replaces the abandoned Qt Widgets desktop
-exploration for the first graphical frontend. The existing CLI/TUI remains supported.
+Historical/deferred as a standalone product. Its loopback gateway and React presenter were reused
+inside the Electron desktop, but `coding-agent web` is not the primary graphical delivery. The
+entry points below are retained only as implementation history; use the repository README.
 
 ## Goal
 

@@ -2,9 +2,9 @@
 
 ## Status
 
-Approved in chat on 2026-08-29. This design preserves the existing Web V1 branch for direct
-comparison and creates an Electron desktop candidate in a separate worktree. It does not replace
-the CLI or TUI.
+Implemented and integrated on 2026-08-30. Electron is now the primary graphical frontend and the
+TUI remains supported. References below to a comparison branch, separate worktree, or Web V1 record
+the implementation phase and are not current launch instructions; use the repository README.
 
 ## Goal
 

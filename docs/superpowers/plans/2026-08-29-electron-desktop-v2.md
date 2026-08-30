@@ -1,5 +1,8 @@
 # Forge Coding Agent Electron Desktop V2 Implementation Plan
 
+> **Status (2026-08-30):** Implemented and integrated. This file is retained as an engineering
+> record; unchecked wording does not supersede the current delivery status in `docs/roadmap.md`.
+
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
 **Goal:** Build a secure Electron + React desktop frontend that reuses the Python Agent runtime,

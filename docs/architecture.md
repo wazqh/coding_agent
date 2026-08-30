@@ -1,31 +1,43 @@
 # Architecture
 
-Forge separates terminal and browser interaction, orchestration, model transport, local tools,
+Forge separates desktop and terminal interaction, orchestration, model transport, local tools,
 safety policy, context, persistence, project memory, and skills. All user-visible front ends consume
-the same `AgentEvent` stream, so TUI, Web, Rich, JSONL, tests, and evaluations observe the same
+the same `AgentEvent` stream, so Electron, TUI, Rich, JSONL, tests, and evaluations observe the same
 behavior.
 
 ```text
-CLI / prompt_toolkit / Rich       React Web renderer
-             |                           |
-             |                 typed loopback gateway
-             |                    semantic presenter
-             |                           |
-             +------ RuntimeFactory -----+
-                         |
-                  AgentController
-                   /     |      \
-            ModelClient  ToolRegistry  ContextManager
-                            |          /      |       \
-                      Safety policy  Session  Memory  Skills
+CLI / prompt_toolkit / Rich              Electron
+             |                         main process
+             |                              |
+             |                    sandboxed preload IPC
+             |                              |
+             |                       React renderer
+             |                              |
+             |                    typed loopback gateway
+             |                     semantic presenter
+             |                              |
+             +--------- RuntimeFactory -----+
+                              |
+                       AgentController
+                        /     |      \
+                 ModelClient  ToolRegistry  ContextManager
+                                 |          /      |       \
+                           Safety policy  Session  Memory  Skills
 ```
 
-## Local Web boundary
+## Desktop process boundary
 
-`coding-agent web` lazily imports FastAPI/Uvicorn, binds only to `127.0.0.1` on an OS-assigned port,
-and serves bundled versioned React assets. A single-use fragment capability is exchanged for an
-HttpOnly SameSite=Strict cookie after exact Host and Origin validation. One authenticated WebSocket
-becomes the controlling client; disconnecting cancels active work and denies pending approvals.
+Electron main selects the workspace, supervises the Python gateway, owns native dialogs and window
+policy, and stores provider credentials through `safeStorage` when platform encryption is
+available. The renderer has `nodeIntegration` disabled, context isolation and sandboxing enabled,
+and can access only the narrow preload API. Navigation is restricted to the private gateway;
+external HTTP(S) links require confirmation before opening in the system browser.
+
+The gateway binds only to `127.0.0.1` on an OS-assigned port and serves bundled versioned React
+assets. A single-use fragment capability is exchanged for an HttpOnly SameSite=Strict cookie after
+exact Host and Origin validation. One authenticated WebSocket becomes the controlling client;
+disconnecting cancels active work and denies pending approvals. The loopback transport is an
+internal desktop boundary, not a remote service or a transfer of filesystem authority to Electron.
 
 The browser receives a closed, versioned semantic protocol: snapshots, final/streamed messages,
 grouped activity, plans, approval requests/results, context usage, bounded file previews, recorded
@@ -35,10 +47,11 @@ through `WorkspacePaths`, rejects traversal and workspace escapes, and is limite
 text no larger than 2 MiB. Historical restore uses final user/assistant messages while ignoring
 historical text deltas, so answers are not duplicated.
 
-The React layer is transport-independent: Zustand projects semantic events into a compact timeline,
-while the WebSocket transport validates every inbound frame before mutation. Noto Sans SC and
-JetBrains Mono are bundled locally; Markdown disables raw HTML and remote resource loading. The
-responsive layout uses a session rail, fluid conversation column, contextual inspector, and fixed
+The React layer is transport-independent: Zustand projects semantic events into a project/session
+tree, readable activity timeline, plan, approvals, final output, and task inspector, while the
+WebSocket transport validates every inbound frame before mutation. Noto Sans SC and JetBrains Mono
+are bundled locally; Markdown disables raw HTML and remote resource loading. The responsive layout
+uses a collapsible session rail, fluid conversation column, contextual inspector, and anchored
 composer, with overlay behavior at narrow widths.
 
 ## Turn lifecycle

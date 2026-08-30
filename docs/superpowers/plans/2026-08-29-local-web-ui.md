@@ -1,5 +1,8 @@
 # Local Web UI Implementation Plan
 
+> **Status (2026-08-30):** Historical. The gateway/renderer work was absorbed by Electron; a
+> standalone browser product is deferred and this file is not a current installation guide.
+
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
 **Goal:** Deliver a polished localhost React frontend over the existing Forge Coding Agent core while preserving CLI/TUI behavior and safety boundaries.
