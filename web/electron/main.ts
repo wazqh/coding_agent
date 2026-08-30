@@ -20,6 +20,7 @@ import { buildGatewayEnvironment } from "./pythonEnvironment.js";
 import { projectTrustChoice } from "./projectTrust.js";
 import type { DesktopRuntimeInfo, ProviderCredentialInput, RestartGatewayInput } from "./types.js";
 import { installWindowPolicy, isExternalHttpUrl } from "./windowPolicy.js";
+import { resolveConfiguredWorkspace } from "./workspaceConfig.js";
 
 const currentDirectory = path.dirname(fileURLToPath(import.meta.url));
 const preloadPath = resolvePreloadPath(currentDirectory);
@@ -39,14 +40,8 @@ function credentialTransactionId(value: unknown): string {
   return value;
 }
 
-function commandLineValue(name: string): string | null {
-  const index = process.argv.indexOf(name);
-  const value = index >= 0 ? process.argv[index + 1] : undefined;
-  return value?.trim() ? value : null;
-}
-
 function configuredWorkspace(): string {
-  return path.resolve(commandLineValue("--cwd") ?? process.cwd());
+  return resolveConfiguredWorkspace(process.argv, process.env, process.cwd());
 }
 
 function configuredPython(): string {

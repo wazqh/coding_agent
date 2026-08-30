@@ -66,10 +66,14 @@ export function Timeline({
     : undefined;
   return (
     <div className="timeline" role="feed" aria-label="Agent 执行记录">
-      {items.map((item) => {
+      {items.map((item, index) => {
         if (item.kind === "user") {
+          const startsNewTurn = index > 0 && items[index - 1]?.kind === "completion";
           return (
-            <article className="user-turn" key={item.id}>
+            <article
+              className={`user-turn${startsNewTurn ? " starts-new-turn" : ""}`}
+              key={item.id}
+            >
               <span>您</span>
               <p>{item.content}</p>
             </article>

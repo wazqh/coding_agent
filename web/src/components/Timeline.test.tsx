@@ -282,6 +282,25 @@ test("keeps unverified completion neutral and reserves success language for real
   expect(screen.getByText("完成 · 验证通过")).toBeInTheDocument();
 });
 
+test("marks a user message after a completion as the start of a new turn", () => {
+  const turns: TimelineItem[] = [
+    {
+      id: "done-1",
+      kind: "completion",
+      status: "completed",
+      reason: "",
+      validationStatus: "not_run",
+    },
+    { id: "user-2", kind: "user", content: "continue with the next task" },
+  ];
+
+  render(<Timeline items={turns} onApproval={() => true} />);
+
+  expect(screen.getByText("continue with the next task").closest("article")).toHaveClass(
+    "starts-new-turn",
+  );
+});
+
 test("renders a failed turn as failed even when no validation ran", () => {
   const failed: TimelineItem[] = [
     {

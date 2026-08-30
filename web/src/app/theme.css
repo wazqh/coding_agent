@@ -3361,6 +3361,19 @@ body {
 .task-heading span { overflow: hidden; color: var(--faint); font-size: 10.5px; text-overflow: ellipsis; white-space: nowrap; }
 .timeline { width: min(1020px, calc(100% - 64px)); padding: 22px 0 72px; }
 .user-turn { margin-bottom: 26px; padding: 15px 18px 16px; background: linear-gradient(135deg, #eaf0f9, #edf2f8); border-color: #d9e2ee; border-radius: 18px; }
+.user-turn.starts-new-turn {
+  position: relative;
+  margin-top: clamp(34px, 5vh, 56px);
+}
+.user-turn.starts-new-turn::before {
+  position: absolute;
+  right: 0;
+  bottom: calc(100% + clamp(16px, 2.5vh, 27px));
+  left: 0;
+  height: 1px;
+  background: linear-gradient(90deg, transparent, #d5dbe2 8%, #d5dbe2 92%, transparent);
+  content: "";
+}
 .activity-row,
 .plan-block,
 .validation-card,

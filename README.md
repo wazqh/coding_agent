@@ -35,11 +35,14 @@ dependencies once, then launch Electron with the workspace Forge may control:
 python -m pip install -e ".[desktop]"
 Set-Location web
 npm ci
-npm run desktop:dev -- --cwd ..
+$env:FORGE_WORKSPACE = (Resolve-Path ..).Path
+npm run desktop:dev
 ```
 
-Pass an absolute path after `--cwd` to open another project. `FORGE_PYTHON` may select the Python
-executable used for the local runtime. The desktop provides project-organized sessions, a visible
+  Set `FORGE_WORKSPACE` to another absolute path to open a different project. For a direct Electron
+  launch, `& .\node_modules\.bin\electron.cmd . --cwd "D:\path\to\project"` remains supported and
+  takes precedence over `FORGE_WORKSPACE`. `FORGE_PYTHON` may select the Python executable used for
+  the local runtime. The desktop provides project-organized sessions, a visible
 Agent activity timeline and plan, inline three-way approvals, Markdown output, `/`/`@`/`$`
 completion, model/provider onboarding, runtime controls, and a read-only changes/Diff/file
 inspector. It uses the same `AgentController`, session store, local tools, approval policy,
