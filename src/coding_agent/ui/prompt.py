@@ -41,8 +41,10 @@ from rich.text import Text
 
 from coding_agent.branding import MODULE_NAME, PRODUCT_NAME
 from coding_agent.controller import AgentController
+from coding_agent.credentials import CredentialStoreError, provider_credential_ref
 from coding_agent.memory import MemoryError
 from coding_agent.model_catalog import ModelCatalogError
+from coding_agent.model_profiles import ModelProfileWriter
 from coding_agent.session import SessionError
 from coding_agent.ui.cancel import EscapeMonitor
 from coding_agent.ui.commands import COMMAND_BY_NAME, COMMAND_SPECS, normalize_command_name
@@ -359,6 +361,7 @@ class InteractiveShell:
                     )
             self._management_hint("model", "/model MODEL_ID", "current provider")
             self._management_hint("provider", "/model use PROVIDER [MODEL_ID]")
+            self._management_hint("add", "/model add PROVIDER", "secure guided setup")
             self._management_hint("catalog", "/model reload")
             return
 
@@ -374,7 +377,36 @@ class InteractiveShell:
                     f"model catalog reloaded: {len(manager.catalog.providers())} providers"
                 )
                 return
-            if parts and parts[0] == "use":
+            if parts and parts[0] == "add":
+                if manager is None or len(parts) != 2:
+                    self._usage("/model")
+                    return
+                credentials = manager.catalog.credentials
+                if credentials is None or not credentials.available:
+                    raise CredentialStoreError("secure credential storage is unavailable")
+                provider = parts[1]
+                base_url = Prompt.ask("Base URL", console=self.console).strip()
+                model_id = Prompt.ask("Model ID", console=self.console).strip()
+                api_key = Prompt.ask("API Key", password=True, console=self.console).strip()
+                reference = provider_credential_ref(provider)
+                credentials.set(reference, api_key)
+                try:
+                    ModelProfileWriter(manager.catalog.path).upsert(
+                        provider=provider,
+                        base_url=base_url,
+                        model=model_id,
+                        compatibility=(
+                            "gemini"
+                            if "generativelanguage.googleapis.com" in base_url
+                            else "openai"
+                        ),
+                    )
+                except Exception:
+                    credentials.delete(reference)
+                    raise
+                manager.reload()
+                selected = manager.switch(provider, model_id)
+            elif parts and parts[0] == "use":
                 if manager is None:
                     raise ModelCatalogError("model catalog is unavailable")
                 if len(parts) not in {2, 3}:
@@ -391,7 +423,7 @@ class InteractiveShell:
                     self.controller.settings.model.name = parts[0]
                     self.controller.model.model = parts[0]
                     selected = None
-        except (ModelCatalogError, RuntimeError, ValueError) as exc:
+        except (CredentialStoreError, ModelCatalogError, RuntimeError, ValueError) as exc:
             self.console.print(f"[red]model switch failed:[/] {exc}")
             return
 

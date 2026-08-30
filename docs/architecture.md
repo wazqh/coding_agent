@@ -28,8 +28,11 @@ CLI / prompt_toolkit / Rich              Electron
 ## Desktop process boundary
 
 Electron main selects the workspace, supervises the Python gateway, owns native dialogs and window
-policy, and stores provider credentials through `safeStorage` when platform encryption is
-available. The renderer has `nodeIntegration` disabled, context isolation and sandboxing enabled,
+policy, and stores provider credentials through the shared Python operating-system credential
+service. Existing Electron `safeStorage` entries are migrated once and retained only as a
+process-local fallback when secure system storage is unavailable. The renderer never receives a
+read-secret API. Environment variables remain explicit process-local overrides. The renderer has
+`nodeIntegration` disabled, context isolation and sandboxing enabled,
 and can access only the narrow preload API. Navigation is restricted to the private gateway;
 external HTTP(S) links require confirmation before opening in the system browser.
 
@@ -76,9 +79,11 @@ terminates the complete command process tree before the cancelled turn is persis
   keyed by normalized repository root plus Git remote.
 - `AGENTS.md` is repository-owned policy. Skills are reusable procedures. Neither is memory.
 
-At 70% of the context window, deterministic compaction preserves the goal, constraints, changes,
-failed approaches, test evidence, pending work, and four recent complete user turns. A compacted
-snapshot has one effective summary and never starts inside an assistant/tool function-call group.
+At 70% of the complete request size (messages plus tool schemas), deterministic compaction runs
+before a new user turn rather than inside an active tool chain. It preserves the goal, constraints,
+visible prior-turn decisions, changes, failed approaches, test evidence, pending work, and up to
+four recent complete user turns. A compacted snapshot has one effective summary and never starts
+inside an assistant/tool function-call group.
 The threshold estimates the complete request, including tool schemas. Before transport, adjacent
 system or interrupted user records and legacy invalid snapshot boundaries are normalized in memory
 for strict compatible providers; the append-only transcript is not rewritten and remains available

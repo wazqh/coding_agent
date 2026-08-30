@@ -131,4 +131,17 @@ describe("credential store", () => {
 
     await expect(store.environment()).resolves.toEqual({});
   });
+
+  it("deletes a migrated credential from the legacy desktop store", async () => {
+    const store = new CredentialStore({
+      storePath: await temporaryPath(),
+      encryption: secureAdapter(),
+      platform: "win32",
+    });
+    await store.save("FORGE_PROVIDER_DEMO_API_KEY", "old-secret");
+
+    await store.delete("FORGE_PROVIDER_DEMO_API_KEY");
+
+    await expect(store.environment()).resolves.toEqual({});
+  });
 });

@@ -6,6 +6,7 @@ from pathlib import Path
 import pytest
 
 from coding_agent.config import Settings
+from coding_agent.credentials import MemoryCredentialService
 from coding_agent.model_catalog import (
     ModelCatalog,
     ModelCatalogError,
@@ -65,6 +66,30 @@ def test_catalog_rejects_unknown_model_and_missing_key_without_leaking_secret(
         catalog.resolve("deepseek")
 
     assert "top-secret" not in str(captured.value)
+
+
+def test_catalog_uses_environment_before_shared_credentials(tmp_path: Path) -> None:
+    path = tmp_path / "models.toml"
+    _write_catalog(path)
+    credentials = MemoryCredentialService()
+    credentials.set("provider:gemini", "stored-secret")
+    catalog = ModelCatalog(
+        path=path,
+        environ={"GEMINI_API_KEY": "environment-secret"},
+        credentials=credentials,
+    )
+
+    assert catalog.resolve("gemini").api_key == "environment-secret"
+
+
+def test_catalog_falls_back_to_shared_provider_credential(tmp_path: Path) -> None:
+    path = tmp_path / "models.toml"
+    _write_catalog(path)
+    credentials = MemoryCredentialService()
+    credentials.set("provider:gemini", "stored-secret")
+    catalog = ModelCatalog(path=path, environ={}, credentials=credentials)
+
+    assert catalog.resolve("gemini").api_key == "stored-secret"
 
 
 def test_model_selection_store_persists_only_provider_and_model(tmp_path: Path) -> None:

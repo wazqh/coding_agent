@@ -114,10 +114,13 @@ Expected: FAIL because `coding_agent.credentials` does not exist.
 class CredentialService(Protocol):
     def get(self, reference: str) -> str | None:
         raise NotImplementedError
+
     def set(self, reference: str, secret: str) -> None:
         raise NotImplementedError
+
     def delete(self, reference: str) -> bool:
         raise NotImplementedError
+
     def available(self) -> bool:
         raise NotImplementedError
 ```
@@ -157,7 +160,9 @@ git commit -m "feat(credentials): add operating-system credential service"
 - [ ] **Step 1: Write failing priority and compatibility tests**
 
 ```python
-selected = catalog.resolve("gemini", credentials=MemoryCredentialService({"provider:gemini": "stored"}))
+selected = catalog.resolve(
+    "gemini", credentials=MemoryCredentialService({"provider:gemini": "stored"})
+)
 assert selected.api_key == "stored"
 ```
 
@@ -218,6 +223,7 @@ def test_interactive_preflight_stores_missing_provider_key_without_echo(catalog,
     assert result is True
     assert prompted == [True]
     assert credentials.get("provider:gemini") == "secret"
+
 
 def test_model_add_never_appends_secret_to_prompt_history(ui, history_file) -> None:
     ui.configure_provider_for_test(provider="gemini", api_key="secret")

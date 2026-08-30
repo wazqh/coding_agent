@@ -6,6 +6,7 @@ from pathlib import Path
 
 from coding_agent.config import ConfigError, Settings, load_settings
 from coding_agent.controller import AgentController
+from coding_agent.credentials import CredentialService, KeyringCredentialService
 from coding_agent.memory import MemoryStore
 from coding_agent.model_catalog import ModelCatalog, ModelSelectionStore
 from coding_agent.model_client import Compatibility, ModelClient
@@ -36,6 +37,7 @@ class RuntimeFactory:
         event_sink: EventSink | None = None,
         approval_callback: ApprovalCallback | None = None,
         environ: Mapping[str, str] | None = None,
+        credentials: CredentialService | None = None,
     ) -> None:
         if permissions not in {"prompt", "auto", "read-only"}:
             raise ConfigError("--permissions must be prompt, auto, or read-only")
@@ -59,7 +61,12 @@ class RuntimeFactory:
         if max_steps_override is not None:
             self.settings.agent.max_steps = max_steps_override
 
-        self.catalog = ModelCatalog(path=data_dir / "models.toml", environ=environment)
+        self.credentials = credentials or KeyringCredentialService()
+        self.catalog = ModelCatalog(
+            path=data_dir / "models.toml",
+            environ=environment,
+            credentials=self.credentials,
+        )
         self.model_state = ModelSelectionStore(data_dir=data_dir)
         active_model = self.model_state.load()
         self.provider = "legacy"

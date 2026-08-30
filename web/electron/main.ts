@@ -10,6 +10,7 @@ import {
   resolveProviderCredential,
 } from "./credentialStore.js";
 import { CredentialTransactionManager } from "./credentialTransactions.js";
+import { migrateLegacyCredentials } from "./credentialMigration.js";
 import {
   GatewayProcess,
   GatewayTrustRequiredError,
@@ -17,6 +18,7 @@ import {
 } from "./gatewayProcess.js";
 import { resolvePreloadPath } from "./preloadPath.js";
 import { buildGatewayEnvironment } from "./pythonEnvironment.js";
+import { PythonCredentialBridge } from "./pythonCredentialBridge.js";
 import { projectTrustChoice } from "./projectTrust.js";
 import type { DesktopRuntimeInfo, ProviderCredentialInput, RestartGatewayInput } from "./types.js";
 import { installWindowPolicy, isExternalHttpUrl } from "./windowPolicy.js";
@@ -32,6 +34,7 @@ let currentWorkspace = "";
 let disposeWindowPolicy: (() => void) | null = null;
 let credentialStore: CredentialStore;
 let credentialTransactions: CredentialTransactionManager;
+let sharedCredentials: PythonCredentialBridge;
 
 function credentialTransactionId(value: unknown): string {
   if (typeof value !== "string" || value.length < 1 || value.length > 128) {
@@ -46,6 +49,20 @@ function configuredWorkspace(): string {
 
 function configuredPython(): string {
   return process.env.FORGE_PYTHON?.trim() || (process.platform === "win32" ? "python" : "python3");
+}
+
+async function configuredPythonEnvironment(): Promise<Record<string, string>> {
+  return buildGatewayEnvironment({
+    appPath: app.getAppPath(),
+    inheritedPythonPath: process.env.PYTHONPATH,
+    sourceExists: async (candidate) => {
+      try {
+        return (await fs.stat(candidate)).isDirectory();
+      } catch {
+        return false;
+      }
+    },
+  });
 }
 
 async function confirmExternal(url: string): Promise<boolean> {
@@ -87,18 +104,14 @@ async function startGateway(
   initialTrust?: ProjectTrustChoice,
 ): Promise<void> {
   if (mainWindow === null) throw new Error("Desktop window is unavailable");
-  const developmentEnvironment = await buildGatewayEnvironment({
-    appPath: app.getAppPath(),
-    inheritedPythonPath: process.env.PYTHONPATH,
-    sourceExists: async (candidate) => {
-      try {
-        return (await fs.stat(candidate)).isDirectory();
-      } catch {
-        return false;
-      }
-    },
-  });
-  const environment = { ...(await credentialStore.environment()), ...developmentEnvironment };
+  const developmentEnvironment = await configuredPythonEnvironment();
+  const legacyCredentials = await credentialStore.environment();
+  const fallbackCredentials = await migrateLegacyCredentials(
+    legacyCredentials,
+    sharedCredentials,
+    (name) => credentialStore.delete(name),
+  );
+  const environment = { ...fallbackCredentials, ...developmentEnvironment };
   let trustMode = initialTrust;
   let ready;
   try {
@@ -163,7 +176,7 @@ function installIpc(window: BrowserWindow): void {
     const credential = resolveProviderCredential(input.provider, input.apiKey);
     return credentialTransactions.stage(providerCredentialName(input.provider), credential);
   });
-  ipcMain.handle("desktop:commit-provider-credential", (event, value: unknown) => {
+  ipcMain.handle("desktop:commit-provider-credential", async (event, value: unknown) => {
     if (!fromWindow(event)) throw new Error("Invalid credential request");
     return credentialTransactions.commit(credentialTransactionId(value));
   });
@@ -204,7 +217,16 @@ async function createMainWindow(): Promise<void> {
     encryption: safeStorage,
     platform: process.platform,
   });
-  credentialTransactions = new CredentialTransactionManager(credentialStore);
+  const pythonEnvironment = await configuredPythonEnvironment();
+  sharedCredentials = new PythonCredentialBridge(configuredPython(), {
+    ...process.env,
+    ...pythonEnvironment,
+  });
+  credentialTransactions = new CredentialTransactionManager(
+    credentialStore,
+    undefined,
+    sharedCredentials,
+  );
   const window = new BrowserWindow({
     width: 1440,
     height: 900,

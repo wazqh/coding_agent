@@ -17,6 +17,13 @@ from coding_agent import __version__
 from coding_agent.branding import COMMAND_NAME, PRODUCT_NAME
 from coding_agent.config import ConfigError
 from coding_agent.controller import AgentController
+from coding_agent.credentials import (
+    CredentialService,
+    KeyringCredentialService,
+    MemoryCredentialService,
+    provider_credential_ref,
+)
+from coding_agent.model_catalog import ModelCatalog, ModelSelectionStore
 from coding_agent.project import TrustManager
 from coding_agent.runtime import RuntimeFactory
 from coding_agent.safety.approval import ApprovalDecision, ApprovalRequest
@@ -106,6 +113,44 @@ def _approval_callback(
     return decide
 
 
+def _prepare_credentials(
+    *,
+    data_dir: Path,
+    interactive: bool,
+    console: Console,
+) -> CredentialService:
+    system_credentials = KeyringCredentialService()
+    credentials: CredentialService = (
+        system_credentials if system_credentials.available else MemoryCredentialService()
+    )
+    if not interactive:
+        return credentials
+    catalog = ModelCatalog(
+        path=data_dir / "models.toml", environ=os.environ, credentials=credentials
+    )
+    if not catalog.providers():
+        return credentials
+    active = ModelSelectionStore(data_dir=data_dir).load()
+    provider = (
+        active.provider
+        if active is not None and active.provider in catalog.providers()
+        else catalog.default_provider or catalog.providers()[0]
+    )
+    profile = catalog.config.providers[provider]
+    reference = profile.credential_ref or provider_credential_ref(provider)
+    if os.environ.get(profile.api_key_env) or credentials.get(reference):
+        return credentials
+    console.print(f"[yellow]API Key required for provider {provider!r}.[/]")
+    api_key = Prompt.ask("API Key", password=True, console=console).strip()
+    credentials.set(reference, api_key)
+    if not credentials.persistent:
+        console.print(
+            "[yellow]Secure system storage is unavailable; "
+            "the key will be kept only for this process.[/]"
+        )
+    return credentials
+
+
 def _build_runtime(
     *,
     cwd: Path,
@@ -136,6 +181,11 @@ def _build_runtime(
     renderer: RichRenderer | JsonlRenderer = (
         JsonlRenderer(console) if output == "jsonl" else RichRenderer(console=console)
     )
+    credentials = _prepare_credentials(
+        data_dir=data_dir,
+        interactive=interactive,
+        console=console,
+    )
     runtime = RuntimeFactory(
         workspace=workspace,
         data_dir=data_dir,
@@ -149,6 +199,7 @@ def _build_runtime(
             if interactive
             else None
         ),
+        credentials=credentials,
     )
     if isinstance(renderer, RichRenderer):
         renderer.raw = runtime.settings.ui.raw_tool_output

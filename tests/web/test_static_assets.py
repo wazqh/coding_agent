@@ -46,7 +46,13 @@ def test_wheel_contains_only_production_web_assets(tmp_path: Path) -> None:
     assert "jetbrains-mono" in "\n".join(static_names)
     assert all(not name.endswith((".map", ".ts", ".tsx")) for name in static_names)
     assert all("node_modules" not in name for name in names)
-    assert all("credential" not in name.lower() and ".env" not in name.lower() for name in names)
+    forbidden_secret_names = {
+        ".env",
+        ".env.local",
+        "provider-credentials.json",
+        "credentials.json",
+    }
+    assert all(Path(name).name.casefold() not in forbidden_secret_names for name in names)
     assert all(".test." not in name for name in static_names)
     assert re.search(r"/assets/index-[\w-]+\.js", index)
     assert re.search(r"/assets/index-[\w-]+\.css", index)

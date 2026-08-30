@@ -30,6 +30,7 @@ COMMAND_SPECS = (
             "/model",
             "/model MODEL_ID",
             "/model use PROVIDER [MODEL_ID]",
+            "/model add PROVIDER",
             "/model reload",
         ),
         "查看或切换当前进程使用的模型。",

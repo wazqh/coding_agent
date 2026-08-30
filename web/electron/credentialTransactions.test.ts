@@ -33,9 +33,16 @@ async function manager(): Promise<{
     encryption: encryption(),
     platform: "win32",
   });
+  const shared = {
+    set: async (reference: string, secret: string) => {
+      expect(reference).toBe("provider:demo");
+      expect(secret).toBe("new-secret");
+      return { persisted: true };
+    },
+  };
   return {
     store,
-    transactions: new CredentialTransactionManager(store, () => "transaction-1"),
+    transactions: new CredentialTransactionManager(store, () => "transaction-1", shared),
   };
 }
 
@@ -50,11 +57,11 @@ test("rollback restores the previous credential without exposing it through the 
   await expect(store.environment()).resolves.toEqual({ FORGE_PROVIDER_DEMO_API_KEY: "old-secret" });
 });
 
-test("committing a credential prevents a later rollback", async () => {
+test("committing writes the shared credential and removes the legacy desktop copy", async () => {
   const { store, transactions } = await manager();
   const result = await transactions.stage("FORGE_PROVIDER_DEMO_API_KEY", "new-secret");
 
-  expect(transactions.commit(result.transactionId)).toBe(true);
+  await expect(transactions.commit(result.transactionId)).resolves.toBe(true);
   await expect(transactions.rollback(result.transactionId)).resolves.toBe(false);
-  await expect(store.environment()).resolves.toEqual({ FORGE_PROVIDER_DEMO_API_KEY: "new-secret" });
+  await expect(store.environment()).resolves.toEqual({});
 });

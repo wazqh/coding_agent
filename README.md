@@ -7,8 +7,9 @@ It does not use an agent framework, hosted code execution, or a remote file serv
 
 ## Install and start
 
-Create a virtual environment, install the package, and provide credentials only through the
-environment:
+Create a virtual environment and install the package. Provider credentials can be saved from the
+desktop model manager or the TUI's guided `/model add PROVIDER` flow; environment variables remain
+available as explicit process-local overrides:
 
 ```text
 python -m pip install -e .
@@ -39,10 +40,10 @@ $env:FORGE_WORKSPACE = (Resolve-Path ..).Path
 npm run desktop:dev
 ```
 
-  Set `FORGE_WORKSPACE` to another absolute path to open a different project. For a direct Electron
-  launch, `& .\node_modules\.bin\electron.cmd . --cwd "D:\path\to\project"` remains supported and
-  takes precedence over `FORGE_WORKSPACE`. `FORGE_PYTHON` may select the Python executable used for
-  the local runtime. The desktop provides project-organized sessions, a visible
+Set `FORGE_WORKSPACE` to another absolute path to open a different project. For a direct Electron
+launch, `& .\node_modules\.bin\electron.cmd . --cwd "D:\path\to\project"` remains supported and
+takes precedence over `FORGE_WORKSPACE`. `FORGE_PYTHON` may select the Python executable used for
+the local runtime. The desktop provides project-organized sessions, a visible
 Agent activity timeline and plan, inline three-way approvals, Markdown output, `/`/`@`/`$`
 completion, model/provider onboarding, runtime controls, and a read-only changes/Diff/file
 inspector. It uses the same `AgentController`, session store, local tools, approval policy,
@@ -59,8 +60,9 @@ not loaded.
 
 Create `models.toml` in the Forge user data directory (the directory selected by
 `CODING_AGENT_DATA_DIR`, or the platform default) to reuse provider profiles across projects. The
-file stores only the environment-variable name that contains each API key; secret values are never
-written to the catalog or active-selection state.
+file stores only non-secret provider metadata, an optional environment override name, and a
+credential reference. Secret values are stored by the operating system (Windows Credential
+Manager, macOS Keychain, or Linux Secret Service), never in the catalog or active-selection state.
 
 ```toml
 default_provider = "gemini"
@@ -68,6 +70,7 @@ default_provider = "gemini"
 [providers.gemini]
 base_url = "https://generativelanguage.googleapis.com/v1beta/openai/"
 api_key_env = "GEMINI_API_KEY"
+credential_ref = "provider:gemini"
 default_model = "gemini-3.7-flash"
 models = ["gemini-3.7-flash", "gemini-3.1-pro"]
 compatibility = "gemini"
@@ -75,14 +78,17 @@ compatibility = "gemini"
 [providers.deepseek]
 base_url = "https://api.deepseek.com/v1"
 api_key_env = "DEEPSEEK_API_KEY"
+credential_ref = "provider:deepseek"
 default_model = "deepseek-chat"
 models = ["deepseek-chat", "deepseek-reasoner"]
 ```
 
-Use `/model use PROVIDER [MODEL_ID]` to change provider, `/model MODEL_ID` to change the
-model within the current provider, and `/model reload` after editing the catalog. The active
+Use `/model add PROVIDER` for guided Base URL, Model ID, and masked API Key setup. Use
+`/model use PROVIDER [MODEL_ID]` to change provider, `/model MODEL_ID` to change the model within
+the current provider, and `/model reload` after editing the catalog. The active
 provider and model are restored on the next launch. `--model` temporarily overrides the restored
-model while retaining the selected provider. Without `models.toml`, the existing `OPENAI_API_KEY`,
+model while retaining the selected provider. A non-empty `api_key_env` value always overrides the
+stored credential for that process. Without `models.toml`, the existing `OPENAI_API_KEY`,
 `OPENAI_BASE_URL`, and `CODING_AGENT_MODEL` flow remains unchanged.
 
 ### Gemini through the OpenAI-compatible endpoint
@@ -131,7 +137,7 @@ Interactive management commands are:
 | --- | --- |
 | `/help [COMMAND]` | List commands with descriptions or show detailed usage for one command. |
 | `/status` | Show the current session, model, permissions, context, plan, memory, and skills. |
-| `/model ...` | Inspect models, switch the current model/provider, or reload `models.toml`. |
+| `/model ...` | Add providers securely, inspect models, switch model/provider, or reload metadata. |
 | `/steps [12-100|reset]` | Inspect or persist the tool-step budget for this workspace. |
 | `/permissions [MODE]` | Inspect or change `prompt`, `auto`, or `read-only` approval policy. |
 | `/plan` / `/diff` | Inspect the current plan or edits applied in this process. |

@@ -14,6 +14,7 @@ from rich.console import Console
 import coding_agent.ui.prompt as prompt_module
 from coding_agent.config import Settings
 from coding_agent.controller import AgentController
+from coding_agent.credentials import MemoryCredentialService
 from coding_agent.events import AgentEvent, AgentState, EventKind, ModelStreamEvent
 from coding_agent.memory import MemoryStore
 from coding_agent.model_catalog import ModelCatalog, ModelSelectionStore
@@ -455,6 +456,34 @@ compatibility = "gemini"
     assert not shell._slash("/model")
     assert "gemini" in output.getvalue()
     assert "gemini-flash" in output.getvalue()
+
+
+def test_model_add_guides_provider_setup_and_saves_key_outside_toml(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    shell, controller, _ = make_shell(tmp_path, monkeypatch)
+    catalog_path = tmp_path / "data" / "models.toml"
+    catalog_path.parent.mkdir(parents=True, exist_ok=True)
+    credentials = MemoryCredentialService()
+    client = ModelClient(model="legacy", api_key="legacy-key", client=object())
+    controller.model = client
+    controller.model_manager = ModelManager(
+        client=client,
+        settings=controller.settings,
+        catalog=ModelCatalog(path=catalog_path, environ={}, credentials=credentials),
+        state=ModelSelectionStore(data_dir=tmp_path / "data"),
+        provider="legacy",
+    )
+    answers = iter(["https://example.test/v1", "demo-model", "top-secret"])
+    monkeypatch.setattr(prompt_module.Prompt, "ask", lambda *args, **kwargs: next(answers))
+    monkeypatch.setattr("coding_agent.model_client.OpenAI", lambda **kwargs: object())
+
+    assert not shell._slash("/model add demo")
+
+    assert credentials.get("provider:demo") == "top-secret"
+    assert controller.model_manager.provider == "demo"
+    assert controller.settings.model.name == "demo-model"
+    assert "top-secret" not in catalog_path.read_text(encoding="utf-8")
 
 
 def test_memory_and_skill_slash_commands(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:

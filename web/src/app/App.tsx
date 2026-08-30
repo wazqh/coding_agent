@@ -150,6 +150,7 @@ export function App({
         ...(sessionId ? { sessionId } : {}),
       }),
     ).catch((error: unknown) => {
+      void window.forgeDesktop?.rollbackProviderCredential(transactionId);
       setCommandFeedback(error instanceof Error ? error.message : "本地运行时重启失败");
     });
   }, [effectiveWorkspacePath, events, sessionId]);

@@ -8,6 +8,7 @@ from typing import Literal
 
 from pydantic import BaseModel, ConfigDict, Field, ValidationError
 
+from coding_agent.credentials import CredentialService, provider_credential_ref
 from coding_agent.safety.paths import atomic_write_text
 
 
@@ -19,6 +20,9 @@ class ProviderProfile(BaseModel):
     model_config = ConfigDict(extra="forbid")
     base_url: str | None = None
     api_key_env: str = Field(pattern=r"^[A-Za-z_][A-Za-z0-9_]*$")
+    credential_ref: str | None = Field(
+        default=None, pattern=r"^[a-z][a-z0-9._-]*:[a-z0-9][a-z0-9._-]*$"
+    )
     default_model: str = Field(min_length=1)
     models: list[str] = Field(default_factory=list)
     compatibility: Literal["openai", "gemini"] = "openai"
@@ -46,9 +50,16 @@ class ActiveModelSelection(BaseModel):
 
 
 class ModelCatalog:
-    def __init__(self, *, path: Path, environ: Mapping[str, str]) -> None:
+    def __init__(
+        self,
+        *,
+        path: Path,
+        environ: Mapping[str, str],
+        credentials: CredentialService | None = None,
+    ) -> None:
         self.path = path
         self.environ = environ
+        self.credentials = credentials
         self.config = CatalogConfig()
         self.reload()
 
@@ -81,8 +92,14 @@ class ModelCatalog:
         if profile.models and model_name not in profile.models:
             raise ModelCatalogError(f"model {model_name!r} is not configured for {provider}")
         api_key = self.environ.get(profile.api_key_env)
+        credential_ref = profile.credential_ref or provider_credential_ref(provider)
+        if not api_key and self.credentials is not None and self.credentials.available:
+            api_key = self.credentials.get(credential_ref)
         if not api_key:
-            raise ModelCatalogError(f"environment variable {profile.api_key_env} is not set")
+            raise ModelCatalogError(
+                f"credential for {provider!r} is not configured; set {profile.api_key_env} "
+                "or save it with Forge model settings"
+            )
         return ModelSelection(
             provider=provider,
             model=model_name,

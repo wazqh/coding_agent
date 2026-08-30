@@ -40,12 +40,14 @@ compatibility = "openai"
     )
 
     assert result.api_key_env == "FORGE_PROVIDER_OPEN_ROUTER_API_KEY"
+    assert result.credential_ref == "provider:open-router"
     value = tomllib.loads(path.read_text(encoding="utf-8"))
     assert set(value["providers"]) == {"existing", "open-router"}
     assert value["providers"]["existing"]["default_model"] == "old-model"
     assert value["providers"]["open-router"] == {
         "base_url": "https://openrouter.ai/api/v1",
         "api_key_env": "FORGE_PROVIDER_OPEN_ROUTER_API_KEY",
+        "credential_ref": "provider:open-router",
         "default_model": "vendor/model",
         "models": ["vendor/model"],
         "compatibility": "openai",

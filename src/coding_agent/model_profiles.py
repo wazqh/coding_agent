@@ -10,6 +10,7 @@ from urllib.parse import urlparse
 
 from pydantic import ValidationError
 
+from coding_agent.credentials import provider_credential_ref
 from coding_agent.model_catalog import CatalogConfig, ModelCatalogError, ProviderProfile
 from coding_agent.safety.paths import atomic_write_text
 
@@ -21,6 +22,7 @@ class ProviderProfileResult:
     provider: str
     model: str
     api_key_env: str
+    credential_ref: str
 
 
 def provider_api_key_env(provider: str) -> str:
@@ -57,12 +59,14 @@ class ModelProfileWriter:
 
         config = self._load()
         api_key_env = provider_api_key_env(provider)
+        credential_ref = provider_credential_ref(provider)
         existing = config.providers.get(provider)
         existing_models = [] if existing is None else list(existing.models)
         models = list(dict.fromkeys([model, *existing_models]))
         config.providers[provider] = ProviderProfile(
             base_url=base_url,
             api_key_env=api_key_env,
+            credential_ref=credential_ref,
             default_model=model,
             models=models,
             compatibility=compatibility,
@@ -70,7 +74,12 @@ class ModelProfileWriter:
         if config.default_provider is None:
             config.default_provider = provider
         atomic_write_text(self.path, _render_catalog(config))
-        return ProviderProfileResult(provider=provider, model=model, api_key_env=api_key_env)
+        return ProviderProfileResult(
+            provider=provider,
+            model=model,
+            api_key_env=api_key_env,
+            credential_ref=credential_ref,
+        )
 
     def _load(self) -> CatalogConfig:
         if not self.path.is_file():
@@ -97,6 +106,8 @@ def _render_catalog(config: CatalogConfig) -> str:
         if profile.base_url is not None:
             lines.append(f"base_url = {_toml_string(profile.base_url)}")
         lines.append(f"api_key_env = {_toml_string(profile.api_key_env)}")
+        if profile.credential_ref is not None:
+            lines.append(f"credential_ref = {_toml_string(profile.credential_ref)}")
         lines.append(f"default_model = {_toml_string(profile.default_model)}")
         models = ", ".join(_toml_string(item) for item in profile.models)
         lines.append(f"models = [{models}]")

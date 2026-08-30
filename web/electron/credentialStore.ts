@@ -152,6 +152,17 @@ export class CredentialStore {
     return environment;
   }
 
+  async delete(name: string): Promise<void> {
+    this.assertName(name);
+    this.memory.delete(name);
+    const backend = this.selectedBackend();
+    if (!(await this.canPersist(backend))) return;
+    const file = await this.readFile();
+    if (!(name in file.credentials)) return;
+    delete file.credentials[name];
+    await this.writeFile(file);
+  }
+
   private selectedBackend(): string {
     return this.encryption.getSelectedStorageBackend?.() ?? "os-encryption";
   }
