@@ -73,6 +73,14 @@ README uses `FORGE_WORKSPACE` with `npm run desktop:dev`, avoiding npm versions 
 `--cwd` instead of forwarding it. Direct invocation of the local Electron binary remains the
 documented diagnostic path.
 
+## Turn boundary polish
+
+The timeline treats one user request, its Agent activity/output, and its completion receipt as one
+visual turn. When another user request follows a completion receipt, the next turn receives a
+responsive top gap and a subtle boundary so the completion marker and user surface never appear as
+one connected block. The treatment uses existing theme tokens, adds no fixed-width assumptions,
+and remains visible without relying on animation.
+
 ## Security and failure handling
 
 - Secrets are redacted by representation and never returned by management/status APIs.
