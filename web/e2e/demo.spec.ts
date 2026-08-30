@@ -13,7 +13,7 @@ async function installDemoRuntime(page: Page) {
     seq += 1;
     socket?.send(
       JSON.stringify({
-        protocol_version: 1,
+        protocol_version: 2,
         type,
         seq,
         session_id: sessionId,
@@ -165,7 +165,7 @@ test("completes the polished two-minute demo path without page overflow", async 
 
   await expect(page.getByText("Forge Coding Agent")).toBeVisible();
   await expect(page.getByText("HammerTest").first()).toBeVisible();
-  await page.getByRole("button", { name: "新任务" }).click();
+  await page.getByRole("button", { name: "新对话" }).click();
 
   const composer = page.getByRole("textbox", { name: "任务输入" });
   await composer.fill("修复认证逻辑并运行测试");
@@ -178,8 +178,9 @@ test("completes the polished two-minute demo path without page overflow", async 
   await page.getByRole("button", { name: "允许一次" }).click();
 
   await expect(page.getByText("已完成修复，并通过")).toBeVisible();
-  await expect(page.getByText("已完成 · 验证通过")).toBeVisible();
-  await page.getByRole("button", { name: "查看变更" }).click();
+  await expect(page.getByText("完成 · 验证通过")).toBeVisible();
+  await page.getByRole("button", { name: "任务检查器" }).click();
+  await page.getByRole("tab", { name: "变更" }).click();
   await expect(page.getByText("已记录 1 次改动")).toBeVisible();
   await expect(page.getByRole("cell", { name: "fixed = True" })).toBeVisible();
   await page.getByRole("button", { name: "查看文件" }).click();

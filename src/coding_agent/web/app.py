@@ -117,10 +117,9 @@ def create_web_app(
         token = websocket.cookies.get(auth.cookie_name)
         host = websocket.headers.get("host", "")
         origin = websocket.headers.get("origin", "")
-        if not auth.authorize(token, host=host, origin=origin):
+        if token is None or not auth.authorize(token, host=host, origin=origin):
             await websocket.close(code=4403)
             return
-        assert token is not None
         if not auth.claim_controller(token):
             await websocket.close(code=4409)
             return

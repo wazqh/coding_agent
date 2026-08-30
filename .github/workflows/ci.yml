@@ -53,7 +53,7 @@ jobs:
           path: coverage.xml
 
   frontend:
-    name: Web / ${{ matrix.os }}
+    name: Desktop renderer / ${{ matrix.os }}
     runs-on: ${{ matrix.os }}
     strategy:
       fail-fast: false
@@ -75,6 +75,8 @@ jobs:
         run: npm test
       - name: Typecheck and production build
         run: npm run build
+      - name: Build Electron main and preload
+        run: npm run desktop:build
       - name: Verify committed production assets
         if: runner.os == 'Linux'
         run: git diff --exit-code -- ../src/coding_agent/web/static
@@ -84,7 +86,7 @@ jobs:
       - name: Install Chromium
         if: runner.os != 'Linux'
         run: npx playwright install chromium
-      - name: Browser demo path
+      - name: Renderer demo path
         run: npm run test:e2e
 
   security:
