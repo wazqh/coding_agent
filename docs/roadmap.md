@@ -22,10 +22,15 @@ browser product.
   timelines, streaming Markdown, inline approval/Diff review, task inspector, bounded file preview,
   `/`/`@`/`$` completion, session controls, Skills, Memory, context, permissions, steps, and provider
   onboarding. Startup restores the latest meaningful workspace session, session deletion removes
-  only its evidenced Memory, and recorded file changes support conflict-safe per-change Undo.
-- Human-readable expandable tool details, created/modified/deleted file accounting, rendered
-  approval and inspector Diffs, and responsive 1024/1920 layouts with a full-height inspector and
-  one composer focus treatment.
+  only its evidenced Memory, and recent-project removal preserves all workspace/session/Memory data.
+- Contextual session file tree with collapsible directories, changed/read status, and an inline
+  workspace-confined read-only preview; full-repository enumeration remains intentionally out of scope.
+- Stable operation cards merge approval, execution, and result state; hard-safety blocks use a
+  non-overridable shield receipt. The restart-safe change ledger supports accept/discard one or all,
+  conflict-safe Undo, unified/side-by-side/fullscreen review, and resizable inspection.
+- Human-readable tool, run, resource, validation, and context details without raw JSON; project
+  verification hooks feed failures through at most two bounded repair attempts while retaining the
+  ordinary approval, safety, cancellation, and Step-budget boundaries.
 - Bundled Noto Sans SC and JetBrains Mono, hashed wheel-contained renderer assets, Python/Vitest
   regression coverage, and a mocked renderer acceptance path at 1024×700 and 1920×1080 on Windows
   and Linux.

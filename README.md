@@ -45,11 +45,19 @@ launch, `& .\node_modules\.bin\electron.cmd . --cwd "D:\path\to\project"` remain
 takes precedence over `FORGE_WORKSPACE`. `FORGE_PYTHON` may select the Python executable used for
 the local runtime. The desktop provides project-organized sessions, a visible
 Agent activity timeline and plan, inline three-way approvals, Markdown output, `/`/`@`/`$`
-completion, model/provider onboarding, runtime controls, and a changes/Diff/file inspector with
-conflict-safe per-change Undo. It resumes the most recent meaningful session for the selected
+completion, model/provider onboarding, runtime controls, and a resizable task inspector. The
+inspector separates **Settings** (model, permissions, and Step budget) from **Run** (verification
+rules and execution evidence), while slash commands open the corresponding panel directly. Its
+**Resources** tab groups files read or changed in the current session into a collapsible tree; selecting
+a file opens the existing workspace-confined, read-only preview with metadata and line numbers. Approval,
+execution, and result states share one operation card instead of producing duplicate receipts.
+The inspector keeps an append-only, restart-safe change ledger with unified/side-by-side/fullscreen
+Diff review, accept/discard one or all, and conflict-safe Undo. It resumes the most recent meaningful session for the selected
 workspace on launch instead of creating an empty conversation; **New conversation** is the explicit
 way to start a clean session. Sessions can be deleted in place, together with only the Memory facts
-that carry evidence from that session. The desktop uses the same `AgentController`, session store,
+that carry evidence from that session. A project can be removed from Forge's recent list after
+confirming its exact path; this never deletes workspace files, Git data, sessions, or Memory. The
+desktop uses the same `AgentController`, session store,
 local tools, approval policy, workspace confinement, Memory, and Skills as the TUI.
 
 Electron supervises a private loopback Python gateway; it does not run the CLI as a child or move
@@ -170,6 +178,13 @@ by repository identity like project Memory, and never edits the workspace; `/ste
 the trusted project value or the default. Non-interactive execution returns code 3 when an approval
 would be required; configuration failures return 2 and user cancellation returns 130.
 
+The desktop **Task inspector → Run** tab can store up to eight project-scoped verification commands,
+one command per line. Verification is disabled until commands are explicitly saved. After a turn
+changes files, Forge runs those checks through the normal command safety, approval, cancellation,
+timeout, and Step-budget boundaries. A failing observation is returned to the model for at most two
+repair attempts; deterministic pass/fail receipts remain separate from the model's prose. Hard
+safety blocks cannot be overridden by verification settings or GUI controls.
+
 ## Safety model
 
 - Every resolved path must remain beneath `--cwd`; traversal, absolute paths, and symlink/junction
@@ -179,7 +194,9 @@ would be required; configuration failures return 2 and user cancellation returns
 - File changes show a unified diff with red/green line backgrounds before approval. The live status
   pauses to expose an explicit `1 once / 2 session / 3 deny` input prompt.
 - Destructive commands such as `git reset --hard`, forced `git clean`, recursive removal, disk
-  formatting, and shutdown are rejected rather than presented for approval.
+  formatting, and shutdown are rejected before execution rather than presented for approval. The
+  desktop identifies these as non-overridable hard-safety decisions and shows the attempted command
+  plus a safer next step without exposing raw protocol JSON.
 - Child processes receive a secret-stripped environment, bounded output, a timeout, and process-tree
   termination.
 - Repository `AGENTS.md`, configuration, and skills require hash-invalidated project trust.

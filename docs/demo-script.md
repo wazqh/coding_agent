@@ -11,9 +11,9 @@ local controller; show a real model/tool/approval/test loop, not the mocked Play
 | 0:10–0:23 | Click **新对话**, enter “修复认证逻辑并运行相关测试”, and send. Show the user task as a distinct surface and the composer changing to Stop. |
 | 0:23–0:42 | Let the visible working receipt show the current step, grouped read/search activity, and the plan progressing from top to bottom. Keep complete labeled tool details collapsed. |
 | 0:42–1:02 | Pause on the inline approval card. Expand the proposed Diff, identify its workspace-relative path, then choose **允许一次**. |
-| 1:02–1:20 | Show the focused test, one structured failure if available, the correction, and the green validation receipt. Do not linger on repetitive tool calls. |
+| 1:02–1:20 | Show the project verification hook running the focused test, one structured failure if available, the bounded correction, and the green deterministic validation receipt. Do not linger on repetitive tool calls. |
 | 1:20–1:35 | Keep the final Markdown answer fully expanded. Show completion and verification evidence without exposing hidden reasoning. |
-| 1:35–1:50 | Open **任务检查器 → 变更**, select one changed file, show its rendered Diff and bounded light file preview, then point out the guarded per-change Undo without triggering it. |
+| 1:35–1:50 | Open **任务检查器 → 变更**, select one changed file, switch unified/side-by-side Diff once, then briefly show the contextual file tree and safe read-only preview under **资源**. Point out restart-safe review without triggering Undo. |
 | 1:50–2:00 | Return to the conversation and state that Electron and TUI share the original Python `AgentController`, local tools, approvals, sessions, Memory, Skills, and workspace boundary. |
 
 Before submission, watch the exported file once and verify that it is at most two minutes and

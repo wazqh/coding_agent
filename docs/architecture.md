@@ -43,8 +43,9 @@ disconnecting cancels active work and denies pending approvals. The loopback tra
 internal desktop boundary, not a remote service or a transfer of filesystem authority to Electron.
 
 The browser receives a closed, versioned semantic protocol: snapshots, final/streamed messages,
-grouped activity, plans, approval requests/results, context usage, bounded file previews, recorded
-diffs, exact change Undo, session deletion, completion, and recoverable errors. It cannot invoke
+grouped activity, plans, approval requests/results, context usage, bounded file previews, durable
+change review, exact change Undo, session/project-list management, completion, and recoverable
+errors. It cannot invoke
 arbitrary tools, read absolute paths, or submit shell commands outside an approval request created
 by the controller. File preview resolves through `WorkspacePaths`, rejects traversal and workspace
 escapes, and is limited to valid UTF-8 text no larger than 2 MiB. Historical restore uses final
@@ -52,13 +53,22 @@ user/assistant messages while ignoring historical text deltas, so answers are no
 Initialization restores the most recent meaningful session for the active workspace, falling back
 to its latest blank session; it creates a Session only when the workspace has none.
 
+The Resources inspector derives a contextual file tree from paths already present in durable changes
+and structured activity. It does not enumerate the entire repository or introduce a second filesystem
+boundary. Directories are collapsible, changed files carry created/modified status, and selecting a
+leaf requests the same bounded preview protocol used by change review. The preview remains read-only
+and renders locally with file metadata and line numbers.
+
 The React layer is transport-independent: Zustand projects semantic events into a project/session
 tree, readable activity timeline, plan, approvals, final output, and task inspector, while the
 WebSocket transport validates every inbound frame before mutation. Noto Sans SC and JetBrains Mono
 are bundled locally; Markdown disables raw HTML and remote resource loading. The responsive layout
 uses a collapsible session rail, fluid conversation column, contextual inspector, and anchored
 composer, with overlay behavior at narrow widths. Routine tool payloads are converted to labeled
-fields and concise summaries rather than exposed as raw JSON.
+fields and concise summaries rather than exposed as raw JSON. Approval, execution, and result
+events share the model tool-call ID, allowing the renderer to update one operation card throughout
+its lifecycle. Successful routine reads may be grouped as an exploration phase; mutations,
+validation, approvals, failures, and hard-safety blocks remain individually inspectable.
 
 ## Turn lifecycle
 
@@ -75,18 +85,29 @@ terminates the complete command process tree before the cancelled turn is persis
 
 ## Persistence controls
 
-- Working state exists only in the current process and contains the goal, plan, recent calls,
-  immutable applied-change records, approvals, and active skills. Each change records its kind,
-  workspace-relative path, before/after hashes and contents, rendered Diff, and reversibility.
-- Session JSONL stores messages, tool observations, events, usage, compaction points, and termination.
+- Working state contains the goal, plan, recent calls, approvals, and active skills. Each tool call
+  carries one stable operation ID through approval, execution, and observation.
+- Session JSONL stores messages, tool observations, semantic events, usage, compaction points,
+  termination, and an append-only change ledger. Each bounded change record includes its kind,
+  workspace-relative path, before/after hashes, rendered Diff, reversible backup when available,
+  and review state. Restore reconstructs review state without replaying side effects.
 - Approved project memory is stored separately, is disabled by default, filtered for secrets, and
   keyed by normalized repository root plus Git remote.
 - `AGENTS.md` is repository-owned policy. Skills are reusable procedures. Neither is memory.
 
-Desktop Undo applies the selected recorded change in reverse only when the current file still
+Desktop accept marks a change reviewed without touching the workspace. Discard/Undo applies the
+selected recorded change in reverse only when the current file still
 matches the recorded after-state. Later edits cause a recoverable conflict instead of an unsafe
-overwrite. Deleting a Session removes only Memory records whose evidence identifies that Session;
-failure in either store rolls the operation back.
+overwrite; bulk discard runs in reverse order and reports partial conflicts. Deleting a Session
+removes only Memory records whose evidence identifies that Session; failure in either store rolls
+the operation back. Removing a project from the recent-project index preserves its directory, Git
+data, sessions, and Memory so reopening it is recoverable.
+
+Project-scoped verification hooks are disabled by default and hold at most eight validated command
+strings. After a turn creates a change, the controller runs them through the existing command tool,
+approval policy, hard-safety screening, cancellation, timeout, and Step budget. A failure becomes a
+normal tool observation and permits at most two model repair attempts. Validation events are shown
+as deterministic receipts and are never inferred from final assistant text.
 
 At 70% of the complete request size (messages plus tool schemas), deterministic compaction runs
 before a new user turn rather than inside an active tool chain. It preserves the goal, constraints,
