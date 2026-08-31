@@ -61,6 +61,30 @@ export interface TurnProgress {
   tool?: string;
 }
 
+export interface VerificationCheckState {
+  id: string;
+  label: string;
+  kind: "test" | "build" | "lint" | "typecheck" | "custom";
+  command: string;
+  cwd: string;
+  timeout_seconds: number;
+  enabled: boolean;
+  source?: "user" | "agent";
+  target_paths?: string[];
+}
+
+export type VerificationModeState = "off" | "checks" | "agent_tdd";
+
+export interface VerificationProcedureState {
+  id: string;
+  instruction: string;
+  enabled: boolean;
+}
+
+export interface VerificationSuggestionState extends VerificationCheckState {
+  scope: "focused" | "full_project";
+}
+
 export interface RuntimeState {
   workspace?: string;
   workspace_name?: string;
@@ -83,10 +107,15 @@ export interface RuntimeState {
     breakdown?: Record<string, number>;
   };
   verification?: {
+    mode?: VerificationModeState;
     enabled?: boolean;
     agent_tdd?: boolean;
+    checks?: VerificationCheckState[];
+    procedures?: VerificationProcedureState[];
     commands?: string[];
     suggested_commands?: string[];
+    suggestions?: VerificationSuggestionState[];
+    workspace_templates?: VerificationCheckState[];
   };
   resources?: Record<string, unknown>;
   plan?: Array<Record<string, unknown>>;
@@ -132,6 +161,16 @@ export interface OperationApproval {
   decision?: string;
 }
 
+export type VerificationResultStatus =
+  | "passed"
+  | "test_failed"
+  | "configuration_error"
+  | "approval_denied"
+  | "timed_out"
+  | "cancelled"
+  | "not_configured"
+  | "not_needed";
+
 export type TimelineItem =
   | { id: string; kind: "user"; content: string }
   | { id: string; kind: "assistant"; content: string; streaming: boolean }
@@ -146,6 +185,7 @@ export type TimelineItem =
       summary: string;
       status: string;
       count?: number;
+      verificationStatus?: VerificationResultStatus;
       detail?: unknown;
       approval?: OperationApproval;
     }
@@ -170,7 +210,8 @@ export type TimelineItem =
       turnId?: string | null;
       status: string;
       reason: string;
-      validationStatus: "passed" | "failed" | "incomplete" | "not_run";
+      validationStatus: "passed" | "failed" | "incomplete" | "not_run" | "not_needed";
+      verificationStatus?: VerificationResultStatus;
     };
 
 export interface AgentState {
@@ -191,6 +232,7 @@ export interface AgentState {
   modelCatalog: ModelCatalogState | null;
   memoryState: MemoryState | null;
   skillsState: SkillsState | null;
+  verificationByTurn: Record<string, VerificationResultStatus>;
   events: ViewEvent[];
   items: TimelineItem[];
   applyEvent: (event: ViewEvent) => void;
@@ -217,6 +259,7 @@ const initialState = {
   modelCatalog: null as ModelCatalogState | null,
   memoryState: null as MemoryState | null,
   skillsState: null as SkillsState | null,
+  verificationByTurn: {} as Record<string, VerificationResultStatus>,
   events: [] as ViewEvent[],
   items: [] as TimelineItem[],
 };
@@ -237,7 +280,7 @@ function clampPercent(value: number, fallback = 0): number {
 function validationStatus(
   items: TimelineItem[],
   turnId: string | null,
-): "passed" | "failed" | "incomplete" | "not_run" {
+): "passed" | "failed" | "incomplete" | "not_run" | "not_needed" {
   const validations = items.filter(
     (item): item is Extract<TimelineItem, { kind: "activity" }> =>
       item.kind === "activity" && item.activityKind === "validation" && item.turnId === turnId,
@@ -246,6 +289,35 @@ function validationStatus(
   if (latest?.status === "failed") return "failed";
   if (latest?.status === "running") return "incomplete";
   if (latest?.status === "completed") return "passed";
+  const changed = items.some(
+    (item) => item.kind === "activity"
+      && item.activityKind === "file_change"
+      && item.turnId === turnId
+      && item.status === "completed",
+  );
+  return changed ? "not_run" : "not_needed";
+}
+
+function exactVerificationStatus(
+  items: TimelineItem[],
+  turnId: string | null,
+): VerificationResultStatus | undefined {
+  const validations = items.filter(
+    (item): item is Extract<TimelineItem, { kind: "activity" }> =>
+      item.kind === "activity" && item.activityKind === "validation" && item.turnId === turnId,
+  );
+  return validations.at(-1)?.verificationStatus;
+}
+
+function coarseVerificationStatus(
+  status: string,
+): "passed" | "failed" | "incomplete" | "not_run" | "not_needed" {
+  if (status === "passed") return "passed";
+  if (["test_failed", "configuration_error", "approval_denied", "timed_out", "failed"].includes(status)) {
+    return "failed";
+  }
+  if (status === "cancelled") return "incomplete";
+  if (status === "not_needed") return "not_needed";
   return "not_run";
 }
 
@@ -253,7 +325,12 @@ export function createAgentStore() {
   return createStore<AgentState>((set) => ({
     ...initialState,
     reset: () => set(initialState),
-    clearView: () => set({ items: [], changes: [], filePreview: null }),
+    clearView: () => set({
+      items: [],
+      changes: [],
+      filePreview: null,
+      verificationByTurn: {},
+    }),
     setConnection: (connection) =>
       set((state) => {
         if (connection !== "disconnected" || !state.busy) return { connection };
@@ -442,6 +519,9 @@ export function createAgentStore() {
             title: text(event.data.title, "Agent 操作"),
             summary: text(event.data.summary),
             status: text(event.data.status, "running"),
+            ...(typeof event.data.verification_status === "string"
+              ? { verificationStatus: event.data.verification_status as VerificationResultStatus }
+              : {}),
             ...(typeof event.data.count === "number" ? { count: event.data.count } : {}),
             ...(event.data.detail === undefined ? {} : { detail: event.data.detail }),
           };
@@ -588,21 +668,24 @@ export function createAgentStore() {
         }
 
         if (event.type === "verification.finished") {
-          const status = text(event.data.status);
-          const validation =
-            status === "passed"
-              ? ("passed" as const)
-              : status === "failed"
-                ? ("failed" as const)
-                : ("not_run" as const);
+          const status = text(event.data.status) as VerificationResultStatus;
+          const validation = coarseVerificationStatus(status);
+          const turnId = event.turn_id;
+          const verificationByTurn = turnId
+            ? { ...state.verificationByTurn, [turnId]: status }
+            : state.verificationByTurn;
+          const manual = event.data.manual !== false;
           return {
             ...base,
-            busy: false,
-            activeTurnId: null,
-            progress: null,
+            ...(manual ? { busy: false, activeTurnId: null, progress: null } : {}),
+            verificationByTurn,
             items: state.items.map((item) =>
-              item.kind === "completion" && item.turnId === event.turn_id
-                ? { ...item, validationStatus: validation }
+              item.kind === "completion" && item.turnId === turnId
+                ? {
+                    ...item,
+                    validationStatus: validation,
+                    verificationStatus: status,
+                  }
                 : item,
             ),
           };
@@ -767,13 +850,23 @@ export function createAgentStore() {
           const items = state.items.map((item) =>
             item.kind === "assistant" && item.streaming ? { ...item, streaming: false } : item,
           );
+          const retainedVerification = event.turn_id
+            ? state.verificationByTurn[event.turn_id]
+            : undefined;
+          const itemVerification = exactVerificationStatus(items, event.turn_id);
+          const verificationStatus = retainedVerification ?? itemVerification;
           const completion: TimelineItem = {
             id: `completion:${event.turn_id ?? event.seq}`,
             kind: "completion",
             turnId: event.turn_id,
             status: text(event.data.status, "completed"),
             reason: text(event.data.reason),
-            validationStatus: validationStatus(items, event.turn_id),
+            validationStatus: verificationStatus
+              ? coarseVerificationStatus(verificationStatus)
+              : validationStatus(items, event.turn_id),
+            ...(verificationStatus
+              ? { verificationStatus }
+              : {}),
           };
           let completionIndex = -1;
           for (let index = items.length - 1; index >= 0; index -= 1) {

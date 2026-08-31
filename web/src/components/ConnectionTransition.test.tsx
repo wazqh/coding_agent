@@ -1,8 +1,12 @@
 import { act, render, screen } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
-import { vi } from "vitest";
+import { afterEach, vi } from "vitest";
 
 import { ConnectionTransition } from "./ConnectionTransition";
+
+afterEach(() => {
+  vi.useRealTimers();
+});
 
 test("presents one animated startup state and reveals slow-start help", () => {
   vi.useFakeTimers();
@@ -14,14 +18,13 @@ test("presents one animated startup state and reveals slow-start help", () => {
     "aria-busy",
     "true",
   );
-  expect(screen.queryByText("启动可能需要更长时间")).not.toBeInTheDocument();
+  expect(screen.queryByText(/启动可能需要更长时间/)).not.toBeInTheDocument();
 
   act(() => vi.advanceTimersByTime(8_000));
-  expect(screen.getByText("启动可能需要更长时间")).toBeInTheDocument();
+  expect(screen.getByText(/启动可能需要更长时间/)).toBeInTheDocument();
 
   view.rerender(<ConnectionTransition state="connected" ready error="" />);
   expect(screen.queryByRole("status")).not.toBeInTheDocument();
-  vi.useRealTimers();
 });
 
 test("explains an expected model-runtime restart without presenting it as a failure", () => {

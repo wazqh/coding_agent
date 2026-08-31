@@ -1,10 +1,13 @@
 from __future__ import annotations
 
-import re
 from dataclasses import dataclass, field
 from typing import Any
 
 from coding_agent.events import AgentEvent, AgentState, EventKind
+from coding_agent.verification import (
+    VERIFICATION_RESULT_RECORD_TYPE,
+    VerificationResultRecord,
+)
 from coding_agent.web.changes import summarize_diff
 from coding_agent.web.protocol import ViewEvent, ViewEventType
 
@@ -16,15 +19,6 @@ _ROUTINE_TOOLS = {
     "find_definition",
     "find_references",
 }
-_VALIDATION_COMMANDS = re.compile(
-    r"(?:^|[;&|]\s*)(?:"
-    r"(?:python\s+-m\s+)?(?:pytest|ruff|mypy|build)(?:\s|$)|"
-    r"(?:npm|pnpm|yarn)\s+(?:test|run\s+(?:test|lint|typecheck|build))(?:\s|$)|"
-    r"cargo\s+(?:test|check)(?:\s|$)|go\s+test(?:\s|$)|"
-    r"(?:tox|nox)(?:\s|$)"
-    r")",
-    re.IGNORECASE,
-)
 
 
 @dataclass
@@ -82,6 +76,25 @@ class AgentEventPresenter:
 
     def present(self, event: AgentEvent) -> list[ViewEvent]:
         if event.kind is EventKind.TEXT:
+            if event.data.get("phase") == "progress":
+                markdown = str(event.data.get("delta", ""))
+                summary = " ".join(markdown.split())
+                if len(summary) > 180:
+                    summary = summary[:177].rstrip() + "…"
+                return [
+                    self._view(
+                        event,
+                        ViewEventType.ACTIVITY_UPSERT,
+                        {
+                            "activity_id": f"agent-note:{event.event_id}",
+                            "kind": "agent_note",
+                            "title": "Agent 说明",
+                            "status": "completed",
+                            "summary": summary,
+                            "detail": {"markdown": markdown},
+                        },
+                    )
+                ]
             return [
                 self._view(
                     event, ViewEventType.MESSAGE_DELTA, {"delta": event.data.get("delta", "")}
@@ -128,6 +141,14 @@ class AgentEventPresenter:
                     event,
                     ViewEventType.CONTEXT_UPDATED,
                     {"action": "compacted", **event.data},
+                )
+            ]
+        if event.kind is EventKind.VERIFICATION:
+            return [
+                self._view(
+                    event,
+                    ViewEventType.VERIFICATION_FINISHED,
+                    dict(event.data),
                 )
             ]
         if event.kind is EventKind.DONE:
@@ -250,7 +271,7 @@ class AgentEventPresenter:
         hard_blocked = (
             result.get("code") == "DANGEROUS_COMMAND" or result_data.get("hard_blocked") is True
         )
-        if name == "run_command":
+        if name in {"run_command", "run_verify"}:
             arguments = self._call_arguments.get(call_id, {})
             command = arguments.get("command")
             if isinstance(command, str):
@@ -302,6 +323,8 @@ class AgentEventPresenter:
                 else result
             ),
         }
+        if isinstance(event.data.get("verification_status"), str):
+            data["verification_status"] = event.data["verification_status"]
         if count is not None:
             data["count"] = count
         return self._view(event, ViewEventType.ACTIVITY_UPSERT, data)
@@ -346,10 +369,13 @@ class AgentEventPresenter:
     def _activity_kind(name: str, arguments: dict[str, Any]) -> str:
         if name in {"apply_patch", "edit_file", "write_file", "replace_text"}:
             return "file_change"
+        if name == "register_verification":
+            return "verification_setup"
+        if name == "run_verify":
+            return "validation"
         if name != "run_command":
             return "tool"
-        command = str(arguments.get("command", "")).strip()
-        return "validation" if _VALIDATION_COMMANDS.search(command) else "command"
+        return "command"
 
     @staticmethod
     def _activity_title(name: str, activity_kind: str) -> str:
@@ -359,6 +385,8 @@ class AgentEventPresenter:
             return "运行命令"
         if activity_kind == "file_change":
             return "修改文件"
+        if activity_kind == "verification_setup":
+            return "登记验证规则"
         return name
 
     @staticmethod
@@ -377,6 +405,12 @@ class AgentEventPresenter:
             return f"查找 {arguments.get('symbol', '符号')} 的引用"
         if name == "run_command":
             return str(arguments.get("command", name))
+        if name == "register_verification":
+            label = str(arguments.get("label", "验证规则"))
+            cwd = str(arguments.get("cwd", "."))
+            return f"{label} · {cwd}"
+        if name == "run_verify":
+            return f"验证规则 {arguments.get('rule_id', '')}".rstrip()
         if name in {"apply_patch", "edit_file", "write_file", "replace_text"}:
             return str(arguments.get("path", arguments.get("file", "工作区文件")))
         return name
@@ -391,12 +425,29 @@ class AgentEventPresenter:
         result: list[ViewEvent] = []
         for record in records:
             record_type = record.get("type")
+            if record_type == VERIFICATION_RESULT_RECORD_TYPE:
+                try:
+                    verification = VerificationResultRecord.model_validate(record.get("data"))
+                except ValueError:
+                    continue
+                self._seq += 1
+                result.append(
+                    ViewEvent(
+                        type=ViewEventType.VERIFICATION_FINISHED,
+                        seq=self._seq,
+                        session_id=session_id,
+                        turn_id=verification.turn_id,
+                        data=verification.model_dump(mode="json"),
+                    )
+                )
+                continue
             if record_type == "event":
                 try:
                     event = AgentEvent.model_validate(record.get("data"))
                 except ValueError:
                     continue
                 if event.kind not in {
+                    EventKind.TEXT,
                     EventKind.PLAN,
                     EventKind.TOOL_CALL,
                     EventKind.TOOL_RESULT,
@@ -406,6 +457,8 @@ class AgentEventPresenter:
                     EventKind.SKILL,
                     EventKind.DONE,
                 }:
+                    continue
+                if event.kind is EventKind.TEXT and event.data.get("phase") != "progress":
                     continue
                 result.extend(self.present(event))
                 continue

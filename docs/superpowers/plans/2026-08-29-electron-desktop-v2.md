@@ -226,7 +226,7 @@ def test_runtime_snapshot_reports_tui_status_without_secrets(runtime_management)
     snapshot = runtime_management.snapshot()
     assert snapshot.model.id == "gemini-flash"
     assert snapshot.permissions == "prompt"
-    assert snapshot.steps.minimum == 12
+    assert snapshot.steps.minimum == 30
     assert snapshot.context.percent_used >= 0
     assert "api_key" not in snapshot.model.model_dump_json().casefold()
 
@@ -247,8 +247,8 @@ Expected: FAIL because `RuntimeManagement` and management coordinator methods do
 
 ```python
 class StepSettings(BaseModel):
-    current: int = Field(ge=12, le=100)
-    configured_default: int = Field(ge=12, le=100)
+    current: int = Field(ge=30, le=999)
+    configured_default: int = Field(ge=30, le=999)
     overridden: bool
 
 
@@ -376,7 +376,7 @@ it("groups models by provider and marks the active model", () => {
 
 `managementStore` tracks `idle | loading | ready | saving | error` per resource and applies
 monotonic sequence updates. Panels send semantic requests, keep stale values visible during reload,
-display sanitized errors inline, and expose 12-100 step presets plus a numeric field.
+display sanitized errors inline, and expose 30-999 step presets plus a numeric field.
 
 - [ ] **Step 6: Verify and commit**
 

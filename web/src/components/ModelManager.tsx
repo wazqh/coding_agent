@@ -9,6 +9,7 @@ import {
 
 export interface ModelSetupInput {
   provider: string;
+  sourceProvider?: string;
   baseUrl: string;
   model: string;
   apiKey: string;
@@ -53,14 +54,6 @@ interface EditorTarget {
 
 function modelKey(provider: string, model: string): string {
   return `${provider}\0${model}`;
-}
-
-function copyModelName(model: string, providers: ManagedModelProvider[]): string {
-  const existing = new Set(providers.flatMap((provider) => configuredModels(provider)));
-  let candidate = `${model}-copy`;
-  let index = 2;
-  while (existing.has(candidate)) candidate = `${model}-copy-${index++}`;
-  return candidate;
 }
 
 export function ModelManager({
@@ -131,7 +124,7 @@ export function ModelManager({
     setPreset("custom");
     setProvider(name);
     setBaseUrl(item.base_url ?? "");
-    setModel(nextMode === "copy" ? copyModelName(modelId, providers) : modelId);
+    setModel(nextMode === "copy" ? "" : modelId);
     setCompatibility(item.compatibility ?? "openai");
     setApiKey("");
     setDeleteArmed(null);
@@ -262,7 +255,7 @@ export function ModelManager({
   const editorTitle = mode === "edit"
     ? `编辑 ${target?.model ?? model}`
     : mode === "copy"
-      ? `复制 ${target?.model ?? "模型"}`
+      ? `基于 ${provider} 添加模型`
       : "添加模型";
 
   return (
@@ -295,6 +288,7 @@ export function ModelManager({
               }))
             : onConfigure({
                 provider,
+                ...(mode === "copy" && target ? { sourceProvider: target.provider.name } : {}),
                 baseUrl: inspection.normalized,
                 model,
                 apiKey,
@@ -364,7 +358,7 @@ export function ModelManager({
             type="url"
             value={baseUrl}
             required
-            disabled={busy || submitting}
+            disabled={busy || submitting || mode === "copy"}
             onChange={(event) => setBaseUrl(event.target.value)}
             placeholder="https://provider.example/v1"
           />
@@ -390,6 +384,7 @@ export function ModelManager({
             className="mono-label"
             value={model}
             required
+            autoFocus={mode === "copy"}
             disabled={busy || submitting}
             onChange={(event) => setModel(event.target.value)}
             placeholder="例如 deepseek-chat"

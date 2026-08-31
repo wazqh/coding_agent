@@ -17,7 +17,7 @@ from coding_agent.session import SessionStore
 from coding_agent.skills import SkillRegistry
 from coding_agent.tools.base import EventSink
 from coding_agent.tools.registry import default_registry
-from coding_agent.workspace_settings import WorkspaceSettingsStore
+from coding_agent.workspace_settings import VerificationCheck, WorkspaceSettingsStore
 
 ControllerFactory = Callable[[str | None], AgentController]
 
@@ -53,17 +53,20 @@ class RuntimeFactory:
             data_dir=data_dir,
         )
         self.settings.agent.capture_configured_max_steps()
-        workspace_settings = WorkspaceSettingsStore(
+        self.workspace_settings = WorkspaceSettingsStore(
             data_dir=data_dir,
             workspace=resolved_workspace,
         )
-        workspace_overrides = workspace_settings.load()
+        workspace_overrides = self.workspace_settings.load()
         max_steps_override = workspace_overrides.max_steps
         if max_steps_override is not None:
             self.settings.agent.max_steps = max_steps_override
-        self.verification_enabled = workspace_overrides.verification.enabled
-        self.verification_agent_tdd = workspace_overrides.verification.agent_tdd
-        self.verification_commands = tuple(workspace_overrides.verification.commands)
+        # Workspace verification settings are importable templates.  The active
+        # contract is restored from the selected session by AgentController.
+        self.verification_enabled = False
+        self.verification_agent_tdd = False
+        self.verification_checks: tuple[VerificationCheck, ...] = ()
+        self.verification_commands: tuple[str, ...] = ()
 
         self.credentials = credentials or KeyringCredentialService()
         self.catalog = ModelCatalog(
@@ -157,8 +160,10 @@ class RuntimeFactory:
             event_sink=self.event_sink,
             model_manager=self.model_manager,
             verification_commands=self.verification_commands,
+            verification_checks=self.verification_checks,
             verification_enabled=self.verification_enabled,
             verification_agent_tdd=self.verification_agent_tdd,
+            workspace_settings=self.workspace_settings,
         )
 
     def controller_factory(self) -> ControllerFactory:

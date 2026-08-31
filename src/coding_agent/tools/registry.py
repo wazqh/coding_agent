@@ -24,6 +24,7 @@ from coding_agent.tools.symbols import (
     ListSymbolsTool,
     SymbolIndex,
 )
+from coding_agent.tools.verification import RegisterVerificationTool, RunVerifyTool
 
 
 class ToolRegistry:
@@ -55,7 +56,10 @@ class ToolRegistry:
                 ok=False,
                 code="INVALID_ARGUMENTS",
                 summary="tool arguments failed validation",
-                data={"errors": exc.errors(include_url=False)},
+                # Pydantic's default context can retain the original ValueError.
+                # Tool observations are persisted and sent through JSON, so keep
+                # validation diagnostics strictly data-only.
+                data={"errors": exc.errors(include_url=False, include_context=False)},
             )
         except (PathSafetyError, OSError, ValueError) as exc:
             return ToolResult(ok=False, code="TOOL_ERROR", summary=str(exc))
@@ -81,6 +85,8 @@ def default_registry() -> ToolRegistry:
             EditFileTool(),
             WriteFileTool(),
             RunCommandTool(),
+            RegisterVerificationTool(),
+            RunVerifyTool(),
             ActivateSkillTool(),
             ReadSkillResourceTool(),
         ]

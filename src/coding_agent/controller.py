@@ -14,7 +14,7 @@ from coding_agent.branding import PRODUCT_NAME
 from coding_agent.change_ledger import CHANGE_RECORD_TYPE, restore_changes, serialize_change
 from coding_agent.config import Settings
 from coding_agent.context import ContextManager, estimate_request_tokens
-from coding_agent.events import AgentEvent, AgentState, EventKind, ToolCall
+from coding_agent.events import AgentEvent, AgentState, EventKind, ToolCall, ToolResult
 from coding_agent.memory import MemoryStore
 from coding_agent.model_client import ModelClient
 from coding_agent.model_runtime import ModelManager
@@ -26,6 +26,16 @@ from coding_agent.skills import SkillError, SkillRegistry
 from coding_agent.tokens import count_tokens
 from coding_agent.tools.base import EventSink, ToolContext, WorkingState
 from coding_agent.tools.registry import ToolRegistry
+from coding_agent.verification import (
+    VERIFICATION_CONFIG_RECORD_TYPE,
+    VERIFICATION_RESULT_RECORD_TYPE,
+    VerificationContract,
+    VerificationMode,
+    VerificationResultRecord,
+    VerificationStatus,
+    restore_verification_contract,
+)
+from coding_agent.workspace_settings import VerificationCheck, WorkspaceSettingsStore
 
 
 @dataclass(frozen=True)
@@ -40,8 +50,10 @@ class RunResult:
 
 @dataclass(frozen=True)
 class VerificationRunResult:
-    status: Literal["passed", "failed", "cancelled", "not_configured"]
+    status: VerificationStatus
     command_count: int
+    summary: str = ""
+    target_paths: tuple[str, ...] = ()
 
 
 class AgentController:
@@ -61,19 +73,40 @@ class AgentController:
         monotonic: Callable[[], float] = time.monotonic,
         model_manager: ModelManager | None = None,
         verification_commands: list[str] | tuple[str, ...] = (),
+        verification_checks: list[VerificationCheck] | tuple[VerificationCheck, ...] = (),
         verification_enabled: bool | None = None,
         verification_agent_tdd: bool = False,
+        verification_contract: VerificationContract | None = None,
+        workspace_settings: WorkspaceSettingsStore | None = None,
     ) -> None:
         self.settings = settings
         self.model = model
         self.model_manager = model_manager
-        self.verification_commands = tuple(verification_commands)
-        self.verification_enabled = (
-            bool(self.verification_commands)
-            if verification_enabled is None
-            else verification_enabled
+        legacy_checks = tuple(verification_checks) or tuple(
+            VerificationCheck(
+                id=f"legacy-{index}",
+                label=f"Verification {index}",
+                command=command,
+            )
+            for index, command in enumerate(verification_commands, start=1)
         )
-        self.verification_agent_tdd = verification_agent_tdd
+        if verification_contract is None:
+            legacy_enabled = (
+                bool(legacy_checks) if verification_enabled is None else verification_enabled
+            )
+            legacy_mode = (
+                VerificationMode.AGENT_TDD
+                if legacy_enabled and verification_agent_tdd
+                else VerificationMode.CHECKS
+                if legacy_enabled
+                else VerificationMode.OFF
+            )
+            verification_contract = VerificationContract(
+                mode=legacy_mode, checks=list(legacy_checks)
+            )
+        self.verification_contract = verification_contract.model_copy(deep=True)
+        self._sync_verification_aliases()
+        self.workspace_settings = workspace_settings
         self.tools = tools
         self.sessions = sessions
         self.approval = approval
@@ -92,6 +125,7 @@ class AgentController:
         self.working = WorkingState()
         self.context = ContextManager(context_window=settings.agent.context_window)
         self.conversation: list[dict[str, Any]] = []
+        self._last_termination_reason: str | None = None
         self._last_system_prompt = ""
         if session_id is not None:
             self._restore(session_id)
@@ -130,7 +164,15 @@ class AgentController:
         self.working.modified_files = {
             change.path: change.after_sha256 for change in self.working.changes
         }
+        restored_contract = restore_verification_contract(records)
+        if restored_contract is not None:
+            self.verification_contract = restored_contract
+            self._sync_verification_aliases()
         for record in records:
+            if record["type"] == "termination" and isinstance(record["data"], dict):
+                reason = record["data"].get("reason")
+                self._last_termination_reason = reason if isinstance(reason, str) else None
+                continue
             if record["type"] == "message" and isinstance(record["data"], dict):
                 self.conversation.append(record["data"])
                 continue
@@ -165,6 +207,24 @@ class AgentController:
                     continue
                 if name not in self.working.active_skills:
                     self.working.active_skills.append(name)
+
+    def _sync_verification_aliases(self) -> None:
+        """Keep the existing runtime interface stable while the contract becomes canonical."""
+
+        self.verification_checks = tuple(self.verification_contract.checks)
+        self.verification_commands = tuple(self.verification_contract.commands)
+        self.verification_enabled = self.verification_contract.enabled
+        self.verification_agent_tdd = self.verification_contract.agent_tdd
+
+    def set_verification_contract(self, contract: VerificationContract) -> VerificationContract:
+        self.verification_contract = contract.model_copy(deep=True)
+        self._sync_verification_aliases()
+        self.sessions.append(
+            self.session_id,
+            VERIFICATION_CONFIG_RECORD_TYPE,
+            self.verification_contract.model_dump(mode="json"),
+        )
+        return self.verification_contract
 
     def set_skill_enabled(self, name: str, enabled: bool) -> None:
         """Update and persist a session-scoped skill availability choice."""
@@ -236,13 +296,49 @@ class AgentController:
         ]
         if self.agents_instructions:
             sections.append("Trusted repository instructions:\n" + self.agents_instructions)
-        if self.verification_enabled and self.verification_agent_tdd:
+        if self.verification_contract.mode is VerificationMode.AGENT_TDD:
             sections.append(
                 "Agent TDD mode is enabled. Before changing production behavior, write or update "
-                "focused tests that reproduce the requested behavior; execute test commands "
-                "through the provided tools and use their returned results as evidence; do not "
-                "simulate or claim command execution. The deterministic verification layer may "
-                "run the configured project checks again before delivery."
+                "focused tests that reproduce the requested behavior in separate test files "
+                "using the project's native test framework. Keep production entry points free "
+                "of inline test harnesses. Make each test project self-contained and declare the "
+                "configured working directory for its verification command. After the test root "
+                "and command are known, call register_verification with the workspace-relative "
+                "working directory and covered paths. Use run_verify with the returned rule id "
+                "when test feedback is needed; do not use run_command for verification and never "
+                "simulate or claim command execution. The deterministic verification layer reruns "
+                "applicable registered rules before delivery."
+            )
+        enabled_procedures = [
+            procedure.instruction
+            for procedure in self.verification_contract.procedures
+            if procedure.enabled
+        ]
+        enabled_checks = [
+            {
+                "id": check.id,
+                "label": check.label,
+                "kind": check.kind,
+                "command": check.command,
+                "cwd": check.cwd,
+                "target_paths": check.target_paths,
+            }
+            for check in self.verification_contract.checks
+            if check.enabled
+        ]
+        if enabled_checks:
+            sections.append(
+                "Current session verification rules. Reuse or update these focused rules instead "
+                "of inventing a broad workspace-root command. Execute a saved rule with "
+                "run_verify using its id; do not execute verification commands through "
+                "run_command, because only run_verify records deterministic verification "
+                "evidence for the UI:\n" + json.dumps(enabled_checks, ensure_ascii=False)
+            )
+        if enabled_procedures:
+            sections.append(
+                "User-authored session verification procedures; follow throughout this turn and "
+                "reflect them when selecting, registering, or updating checks:\n"
+                + "\n".join(f"- {instruction}" for instruction in enabled_procedures)
             )
         if memory_text:
             sections.append(memory_text)
@@ -284,7 +380,13 @@ class AgentController:
     def _explicit_skills(user_input: str) -> list[str]:
         return list(dict.fromkeys(re.findall(r"(?<!\w)\$([a-z0-9][a-z0-9_-]{0,63})", user_input)))
 
-    def _tool_context(self, turn_id: str, cancel_event: Event | None = None) -> ToolContext:
+    def _tool_context(
+        self,
+        turn_id: str,
+        cancel_event: Event | None = None,
+        *,
+        verification_command: tuple[str, str] | None = None,
+    ) -> ToolContext:
         def tool_sink(event: AgentEvent) -> None:
             self.sessions.append(self.session_id, "event", event.model_dump(mode="json"))
             if self.event_sink:
@@ -300,7 +402,114 @@ class AgentController:
             command_timeout=self.settings.agent.command_timeout,
             skills=self.skills,
             cancel_requested=cancel_event.is_set if cancel_event is not None else None,
+            verification_registrar=self._register_verification_check,
+            verification_runner=lambda rule_id, operation_id: self._run_registered_verification(
+                rule_id,
+                turn_id=turn_id,
+                cancel_event=cancel_event,
+                operation_id=operation_id,
+            ),
+            verification_command=verification_command,
         )
+
+    def _run_registered_verification(
+        self,
+        rule_id: str,
+        *,
+        turn_id: str,
+        cancel_event: Event | None,
+        operation_id: str | None,
+    ) -> ToolResult:
+        check = next(
+            (
+                item
+                for item in self.verification_contract.checks
+                if item.enabled and item.id == rule_id
+            ),
+            None,
+        )
+        if check is None:
+            return ToolResult(
+                ok=False,
+                code="UNKNOWN_VERIFICATION_RULE",
+                summary=f"unknown or disabled verification rule: {rule_id}",
+            )
+        started = self.monotonic()
+        context = self._tool_context(
+            turn_id,
+            cancel_event,
+            verification_command=(check.command, check.cwd),
+        )
+        context.operation_id = operation_id
+        result = self.tools.execute(
+            "run_command",
+            self._verification_arguments(check),
+            context,
+        )
+        status = self._verification_status(result.code, result.ok)
+        changed_paths = list(
+            dict.fromkeys(
+                change.path for change in self.working.changes if change.turn_id == turn_id
+            )
+        )
+        self._persist_automatic_verification_result(
+            turn_id=turn_id,
+            status=status,
+            command_count=1,
+            changed_paths=changed_paths,
+            summary=result.summary,
+            started=started,
+            check=check,
+        )
+        data = dict(result.data)
+        data.update(
+            {
+                "verification": True,
+                "verification_status": status,
+                "verification_check": check.model_dump(mode="json"),
+            }
+        )
+        return result.model_copy(update={"data": data})
+
+    def _register_verification_check(self, check: VerificationCheck) -> VerificationCheck:
+        checks = list(self.verification_contract.checks)
+        match = next(
+            (
+                index
+                for index, current in enumerate(checks)
+                if current.id == check.id
+                or (current.command == check.command and current.cwd == check.cwd)
+            ),
+            None,
+        )
+        if match is None:
+            if len(checks) >= 8:
+                raise ValueError("at most 8 verification rules may be registered")
+            checks.append(check)
+        else:
+            checks[match] = check
+        mode = self.verification_contract.mode
+        if mode is VerificationMode.OFF:
+            mode = VerificationMode.CHECKS
+        self.set_verification_contract(
+            self.verification_contract.model_copy(update={"mode": mode, "checks": checks})
+        )
+        return check
+
+    @staticmethod
+    def _verification_check_matches_changes(
+        check: VerificationCheck,
+        changed_paths: list[str],
+    ) -> bool:
+        if not check.target_paths:
+            return True
+        for target in check.target_paths:
+            if target == ".":
+                return True
+            prefix = target.rstrip("/") + "/"
+            if any(path == target or path.startswith(prefix) for path in changed_paths):
+                return True
+        return False
 
     def run_verification(
         self,
@@ -315,16 +524,52 @@ class AgentController:
         remain identical to commands initiated by the model.
         """
 
-        if not self.verification_commands:
-            return VerificationRunResult(status="not_configured", command_count=0)
+        changed_paths = list(
+            dict.fromkeys(
+                change.path for change in self.working.changes if change.turn_id == turn_id
+            )
+        )
+        if not changed_paths:
+            return self._finish_manual_verification(
+                turn_id=turn_id,
+                status="not_needed",
+                command_count=0,
+                changed_paths=[],
+                summary="This turn did not change files.",
+            )
+        checks = tuple(
+            check
+            for check in self.verification_checks
+            if check.enabled and self._verification_check_matches_changes(check, changed_paths)
+        )
+        if not checks:
+            return self._finish_manual_verification(
+                turn_id=turn_id,
+                status="not_configured",
+                command_count=0,
+                changed_paths=changed_paths,
+                summary="No verification rule covers this turn's changed files.",
+            )
 
-        context = self._tool_context(turn_id, cancel_event)
         completed = 0
-        for command in self.verification_commands:
+        started = self.monotonic()
+        for check in checks:
             if cancel_event is not None and cancel_event.is_set():
-                return VerificationRunResult(status="cancelled", command_count=completed)
+                return self._finish_manual_verification(
+                    turn_id=turn_id,
+                    status="cancelled",
+                    command_count=completed,
+                    changed_paths=changed_paths,
+                    summary="Verification was cancelled before the next rule started.",
+                    execution_ms=round((self.monotonic() - started) * 1000),
+                )
             operation_id = f"verification-{uuid4().hex[:16]}"
-            arguments = {"command": command}
+            arguments = self._verification_arguments(check)
+            context = self._tool_context(
+                turn_id,
+                cancel_event,
+                verification_command=(check.command, check.cwd),
+            )
             self._set_state(
                 AgentState.TOOL_PENDING,
                 turn_id,
@@ -340,6 +585,7 @@ class AgentController:
                     "arguments": arguments,
                     "verification": True,
                     "manual": True,
+                    "verification_check": check.model_dump(mode="json"),
                 },
             )
             self._set_state(
@@ -351,6 +597,7 @@ class AgentController:
             context.operation_id = operation_id
             result = self.tools.execute("run_command", arguments, context)
             completed += 1
+            status = self._verification_status(result.code, result.ok)
             self._set_state(
                 AgentState.OBSERVING,
                 turn_id,
@@ -366,13 +613,130 @@ class AgentController:
                     "result": result.model_dump(),
                     "verification": True,
                     "manual": True,
+                    "verification_check": check.model_dump(mode="json"),
+                    "verification_status": status,
                 },
             )
             if cancel_event is not None and cancel_event.is_set():
-                return VerificationRunResult(status="cancelled", command_count=completed)
-            if not result.ok:
-                return VerificationRunResult(status="failed", command_count=completed)
-        return VerificationRunResult(status="passed", command_count=completed)
+                status = "cancelled"
+            if status != "passed":
+                return self._finish_manual_verification(
+                    turn_id=turn_id,
+                    status=status,
+                    command_count=completed,
+                    changed_paths=changed_paths,
+                    check=check,
+                    summary=result.summary,
+                    execution_ms=round((self.monotonic() - started) * 1000),
+                )
+        return self._finish_manual_verification(
+            turn_id=turn_id,
+            status="passed",
+            command_count=completed,
+            changed_paths=changed_paths,
+            summary="All selected verification rules passed.",
+            execution_ms=round((self.monotonic() - started) * 1000),
+        )
+
+    def _finish_manual_verification(
+        self,
+        *,
+        turn_id: str,
+        status: VerificationStatus,
+        command_count: int,
+        changed_paths: list[str],
+        summary: str,
+        check: VerificationCheck | None = None,
+        execution_ms: int = 0,
+    ) -> VerificationRunResult:
+        record = VerificationResultRecord(
+            turn_id=turn_id,
+            status=status,
+            command_count=command_count,
+            check_id=None if check is None else check.id,
+            command=None if check is None else check.command,
+            cwd=None if check is None else check.cwd,
+            target_paths=changed_paths,
+            summary=summary,
+            execution_ms=execution_ms,
+            manual=True,
+        )
+        self._persist_verification_result(record)
+        return VerificationRunResult(
+            status=status,
+            command_count=command_count,
+            summary=summary,
+            target_paths=tuple(changed_paths),
+        )
+
+    def _persist_verification_result(self, record: VerificationResultRecord) -> None:
+        self.sessions.append(
+            self.session_id,
+            VERIFICATION_RESULT_RECORD_TYPE,
+            record.model_dump(mode="json"),
+        )
+
+    def _persist_automatic_verification_result(
+        self,
+        *,
+        turn_id: str,
+        status: VerificationStatus,
+        command_count: int,
+        changed_paths: list[str],
+        summary: str,
+        started: float,
+        check: VerificationCheck | None = None,
+    ) -> None:
+        record = VerificationResultRecord(
+            turn_id=turn_id,
+            status=status,
+            command_count=command_count,
+            check_id=None if check is None else check.id,
+            command=None if check is None else check.command,
+            cwd=None if check is None else check.cwd,
+            target_paths=changed_paths,
+            summary=summary,
+            execution_ms=round((self.monotonic() - started) * 1000),
+            manual=False,
+        )
+        self._persist_verification_result(record)
+        self._emit(
+            EventKind.VERIFICATION,
+            turn_id=turn_id,
+            data=record.model_dump(mode="json"),
+        )
+
+    @staticmethod
+    def _verification_arguments(check: VerificationCheck) -> dict[str, object]:
+        return {
+            "command": check.command,
+            "cwd": check.cwd,
+            "timeout": check.timeout_seconds,
+        }
+
+    @staticmethod
+    def _verification_status(
+        code: str,
+        ok: bool,
+    ) -> Literal[
+        "passed",
+        "test_failed",
+        "configuration_error",
+        "approval_denied",
+        "timed_out",
+        "cancelled",
+    ]:
+        if ok:
+            return "passed"
+        if code == "COMMAND_FAILED":
+            return "test_failed"
+        if code == "APPROVAL_DENIED":
+            return "approval_denied"
+        if code == "TIMEOUT":
+            return "timed_out"
+        if code == "CANCELLED":
+            return "cancelled"
+        return "configuration_error"
 
     def manual_compact(self) -> str:
         compacted, summary = self.context.compact(self.conversation, self.working)
@@ -438,8 +802,68 @@ class AgentController:
         Repair those request-only boundaries without rewriting durable session history.
         """
 
+        # Strict OpenAI-compatible providers reject any assistant tool-call group
+        # that is not immediately followed by one tool result for every call id.
+        # Repair request history without rewriting the append-only session log.
+        normalized: list[dict[str, Any]] = []
+        index = 0
+        while index < len(messages):
+            current = dict(messages[index])
+            if current.get("role") == "tool":
+                # An orphaned result cannot be attached safely to an earlier group.
+                index += 1
+                continue
+            calls = current.get("tool_calls") if current.get("role") == "assistant" else None
+            if not isinstance(calls, list) or not calls:
+                normalized.append(current)
+                index += 1
+                continue
+            normalized.append(current)
+            results: dict[str, dict[str, Any]] = {}
+            cursor = index + 1
+            while cursor < len(messages) and messages[cursor].get("role") == "tool":
+                result = dict(messages[cursor])
+                call_id = result.get("tool_call_id")
+                if isinstance(call_id, str) and call_id not in results:
+                    results[call_id] = result
+                cursor += 1
+            for call in calls:
+                if not isinstance(call, dict):
+                    continue
+                call_id = call.get("id")
+                if not isinstance(call_id, str) or not call_id:
+                    continue
+                existing = results.get(call_id)
+                if existing is not None:
+                    normalized.append(existing)
+                    continue
+                function = call.get("function")
+                name = function.get("name") if isinstance(function, dict) else None
+                normalized.append(
+                    {
+                        "role": "tool",
+                        "tool_call_id": call_id,
+                        "name": name if isinstance(name, str) else "tool",
+                        "content": json.dumps(
+                            {
+                                "ok": False,
+                                "code": "INCOMPLETE_TOOL_CALL",
+                                "summary": (
+                                    "the previous tool call ended before its result was recorded; "
+                                    "re-run it if still needed"
+                                ),
+                                "data": {},
+                                "retryable": True,
+                                "truncated": False,
+                            },
+                            ensure_ascii=False,
+                        ),
+                    }
+                )
+            index = cursor
+
         prepared: list[dict[str, Any]] = []
-        for message in messages:
+        for message in normalized:
             current = dict(message)
             role = current.get("role")
             if role in {"system", "user"} and prepared and prepared[-1].get("role") == role:
@@ -477,6 +901,41 @@ class AgentController:
         turn_id = uuid4().hex[:16]
         started = self.monotonic()
         self.working.goal = user_input
+        if self._last_termination_reason in {
+            "tool step budget exhausted",
+            "turn time budget exhausted",
+        }:
+            before = estimate_request_tokens(
+                self._messages_for_model(self.conversation), self.tools.schemas()
+            )
+            compacted, summary = self.context.compact(
+                self.conversation,
+                self.working,
+                retain_turns=0,
+            )
+            if summary:
+                self.conversation = compacted
+                self.sessions.append(
+                    self.session_id,
+                    "compact",
+                    {
+                        "summary": summary,
+                        "manual": False,
+                        "continuation": True,
+                        "tokens_before": before,
+                        "conversation": self.conversation,
+                    },
+                )
+                self._emit(
+                    EventKind.COMPACT,
+                    turn_id=turn_id,
+                    data={
+                        "tokens_before": before,
+                        "summary": summary,
+                        "continuation": True,
+                    },
+                )
+        self._last_termination_reason = None
         explicit_skills = self._explicit_skills(user_input)
         memory_text = ""
         if self.memory is not None:
@@ -556,11 +1015,6 @@ class AgentController:
                 content_parts: list[str] = []
                 tool_calls: list[ToolCall] = []
                 model_error: str | None = None
-                defer_text = (
-                    self.verification_enabled
-                    and bool(self.verification_commands)
-                    and any(change.id not in initial_change_ids for change in self.working.changes)
-                )
                 for event in self.model.stream(request_messages, tool_schemas):
                     if cancel_event is not None and cancel_event.is_set():
                         return self._finish(
@@ -573,8 +1027,6 @@ class AgentController:
                         )
                     if event.type == "text_delta" and event.text:
                         content_parts.append(event.text)
-                        if not defer_text:
-                            self._emit(EventKind.TEXT, turn_id=turn_id, data={"delta": event.text})
                     elif event.type == "tool_calls":
                         tool_calls = event.tool_calls
                     elif event.type == "usage" and event.usage:
@@ -604,8 +1056,12 @@ class AgentController:
                     )
                 assistant: dict[str, Any] = {"role": "assistant", "content": content or None}
                 if tool_calls:
-                    if defer_text and content:
-                        self._emit(EventKind.TEXT, turn_id=turn_id, data={"delta": content})
+                    if content:
+                        self._emit(
+                            EventKind.TEXT,
+                            turn_id=turn_id,
+                            data={"delta": content, "phase": "progress"},
+                        )
                     assistant["tool_calls"] = []
                     for call in tool_calls:
                         call_payload: dict[str, Any] = {
@@ -635,13 +1091,32 @@ class AgentController:
                         change.id not in initial_change_ids for change in self.working.changes
                     )
                     verification_failed = False
-                    if (
-                        changed_this_turn
-                        and self.verification_enabled
-                        and self.verification_commands
-                    ):
-                        context = self._tool_context(turn_id, cancel_event)
-                        for command in self.verification_commands:
+                    if changed_this_turn and self.verification_enabled:
+                        changed_paths = list(
+                            dict.fromkeys(
+                                change.path
+                                for change in self.working.changes
+                                if change.id not in initial_change_ids
+                            )
+                        )
+                        matching_checks = tuple(
+                            check
+                            for check in self.verification_checks
+                            if check.enabled
+                            and self._verification_check_matches_changes(check, changed_paths)
+                        )
+                        verification_started = self.monotonic()
+                        completed_verifications = 0
+                        if not matching_checks:
+                            self._persist_automatic_verification_result(
+                                turn_id=turn_id,
+                                status="not_configured",
+                                command_count=0,
+                                changed_paths=changed_paths,
+                                summary="No verification rule covers this turn's changed files.",
+                                started=verification_started,
+                            )
+                        for check in matching_checks:
                             if steps >= self.settings.agent.max_steps:
                                 self._append_message(assistant)
                                 return self._finish(
@@ -652,7 +1127,12 @@ class AgentController:
                                     "verification could not run within the tool step budget",
                                 )
                             operation_id = f"verification-{uuid4().hex[:16]}"
-                            arguments = {"command": command}
+                            arguments = self._verification_arguments(check)
+                            context = self._tool_context(
+                                turn_id,
+                                cancel_event,
+                                verification_command=(check.command, check.cwd),
+                            )
                             self._append_message(
                                 {
                                     "role": "assistant",
@@ -687,6 +1167,7 @@ class AgentController:
                                     "name": "run_command",
                                     "arguments": arguments,
                                     "verification": True,
+                                    "verification_check": check.model_dump(mode="json"),
                                 },
                             )
                             self._set_state(
@@ -697,6 +1178,11 @@ class AgentController:
                             )
                             context.operation_id = operation_id
                             result = self.tools.execute("run_command", arguments, context)
+                            completed_verifications += 1
+                            verification_status = self._verification_status(
+                                result.code,
+                                result.ok,
+                            )
                             self._append_message(
                                 {
                                     "role": "tool",
@@ -719,9 +1205,20 @@ class AgentController:
                                     "name": "run_command",
                                     "result": result.model_dump(),
                                     "verification": True,
+                                    "verification_check": check.model_dump(mode="json"),
+                                    "verification_status": verification_status,
                                 },
                             )
                             if cancel_event is not None and cancel_event.is_set():
+                                self._persist_automatic_verification_result(
+                                    turn_id=turn_id,
+                                    status="cancelled",
+                                    command_count=completed_verifications,
+                                    changed_paths=changed_paths,
+                                    summary="Verification was cancelled.",
+                                    started=verification_started,
+                                    check=check,
+                                )
                                 return self._finish(
                                     AgentState.CANCELLED,
                                     turn_id,
@@ -730,7 +1227,16 @@ class AgentController:
                                     "cancelled by Esc",
                                     130,
                                 )
-                            if result.code == "APPROVAL_DENIED":
+                            if verification_status == "approval_denied":
+                                self._persist_automatic_verification_result(
+                                    turn_id=turn_id,
+                                    status=verification_status,
+                                    command_count=completed_verifications,
+                                    changed_paths=changed_paths,
+                                    summary=result.summary,
+                                    started=verification_started,
+                                    check=check,
+                                )
                                 return self._finish(
                                     AgentState.FAILED,
                                     turn_id,
@@ -739,7 +1245,70 @@ class AgentController:
                                     "verification approval was denied",
                                     exit_code=3,
                                 )
-                            if not result.ok:
+                            if verification_status == "cancelled":
+                                self._persist_automatic_verification_result(
+                                    turn_id=turn_id,
+                                    status=verification_status,
+                                    command_count=completed_verifications,
+                                    changed_paths=changed_paths,
+                                    summary=result.summary,
+                                    started=verification_started,
+                                    check=check,
+                                )
+                                return self._finish(
+                                    AgentState.CANCELLED,
+                                    turn_id,
+                                    content,
+                                    steps,
+                                    "verification was cancelled",
+                                    exit_code=130,
+                                )
+                            if verification_status == "configuration_error":
+                                self._persist_automatic_verification_result(
+                                    turn_id=turn_id,
+                                    status=verification_status,
+                                    command_count=completed_verifications,
+                                    changed_paths=changed_paths,
+                                    summary=result.summary,
+                                    started=verification_started,
+                                    check=check,
+                                )
+                                self._append_message(assistant)
+                                return self._finish(
+                                    AgentState.FAILED,
+                                    turn_id,
+                                    content,
+                                    steps,
+                                    "verification configuration error",
+                                )
+                            if verification_status == "timed_out":
+                                self._persist_automatic_verification_result(
+                                    turn_id=turn_id,
+                                    status=verification_status,
+                                    command_count=completed_verifications,
+                                    changed_paths=changed_paths,
+                                    summary=result.summary,
+                                    started=verification_started,
+                                    check=check,
+                                )
+                                self._append_message(assistant)
+                                return self._finish(
+                                    AgentState.FAILED,
+                                    turn_id,
+                                    content,
+                                    steps,
+                                    "verification timed out",
+                                )
+                            if verification_status == "test_failed":
+                                self._persist_automatic_verification_result(
+                                    turn_id=turn_id,
+                                    status=verification_status,
+                                    command_count=completed_verifications,
+                                    changed_paths=changed_paths,
+                                    summary=result.summary,
+                                    started=verification_started,
+                                    check=check,
+                                )
                                 verification_failures += 1
                                 if verification_failures >= 3:
                                     self._append_message(assistant)
@@ -765,10 +1334,23 @@ class AgentController:
                                     },
                                 )
                                 break
+                        if matching_checks and not verification_failed:
+                            self._persist_automatic_verification_result(
+                                turn_id=turn_id,
+                                status="passed",
+                                command_count=completed_verifications,
+                                changed_paths=changed_paths,
+                                summary="All selected verification rules passed.",
+                                started=verification_started,
+                            )
                     if verification_failed:
                         continue
-                    if defer_text and content:
-                        self._emit(EventKind.TEXT, turn_id=turn_id, data={"delta": content})
+                    if content:
+                        self._emit(
+                            EventKind.TEXT,
+                            turn_id=turn_id,
+                            data={"delta": content, "phase": "final"},
+                        )
                     self._append_message(assistant)
                     return self._finish(
                         AgentState.COMPLETED, turn_id, content, steps, "assistant completed"
@@ -806,7 +1388,12 @@ class AgentController:
                     self._emit(
                         EventKind.TOOL_CALL,
                         turn_id=turn_id,
-                        data={"id": call.id, "name": call.name, "arguments": call.arguments},
+                        data={
+                            "id": call.id,
+                            "name": call.name,
+                            "arguments": call.arguments,
+                            **({"verification": True} if call.name == "run_verify" else {}),
+                        },
                     )
                     self._set_state(AgentState.EXECUTING, turn_id, tool=call.name, step=steps)
                     context.operation_id = call.id
@@ -842,7 +1429,19 @@ class AgentController:
                     self._emit(
                         EventKind.TOOL_RESULT,
                         turn_id=turn_id,
-                        data={"id": call.id, "name": call.name, "result": result.model_dump()},
+                        data={
+                            "id": call.id,
+                            "name": call.name,
+                            "result": result.model_dump(),
+                            **(
+                                {
+                                    "verification": True,
+                                    "verification_status": result.data.get("verification_status"),
+                                }
+                                if call.name == "run_verify"
+                                else {}
+                            ),
+                        },
                     )
                     if cancel_event is not None and cancel_event.is_set():
                         self._append_unexecuted_tools(
@@ -950,6 +1549,7 @@ class AgentController:
             "termination",
             {"status": status.value, "reason": reason, "exit_code": code},
         )
+        self._last_termination_reason = reason
         if status is AgentState.COMPLETED:
             self.sessions.ensure_title(self.session_id, self.working.goal)
         return RunResult(status, code, self.session_id, content, steps, reason)

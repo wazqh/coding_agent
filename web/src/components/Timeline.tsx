@@ -14,6 +14,7 @@ interface TimelineProps {
   approvalAvailable?: boolean;
   onVerify?: (turnId: string) => void;
   onRepair?: (turnId: string) => void;
+  onConfigureVerification?: () => void;
   showRaw?: boolean;
   working?: {
     status: string;
@@ -48,6 +49,12 @@ const workingLabels: Record<string, string> = {
 };
 
 function completionLabel(item: Extract<TimelineItem, { kind: "completion" }>): string {
+  if (item.verificationStatus === "configuration_error") return "已结束 · 验证配置有误";
+  if (item.verificationStatus === "approval_denied") return "已结束 · 验证未获授权";
+  if (item.verificationStatus === "timed_out") return "已结束 · 验证超时";
+  if (item.verificationStatus === "cancelled") return "已结束 · 验证已取消";
+  if (item.verificationStatus === "not_configured") return "已结束 · 没有适用的验证规则";
+  if (item.verificationStatus === "not_needed") return "已完成";
   if (item.validationStatus === "failed" && ["completed", "failed"].includes(item.status)) {
     return "已完成 · 验证失败";
   }
@@ -55,6 +62,7 @@ function completionLabel(item: Extract<TimelineItem, { kind: "completion" }>): s
     if (item.validationStatus === "passed") return "已完成 · 验证通过";
     if (item.validationStatus === "failed") return "已完成 · 验证失败";
     if (item.validationStatus === "incomplete") return "正在验证";
+    if (item.validationStatus === "not_needed") return "已完成";
     return "已结束 · 未验证";
   }
   const terminal =
@@ -73,7 +81,7 @@ function completionLabel(item: Extract<TimelineItem, { kind: "completion" }>): s
         : item.validationStatus === "incomplete"
           ? "验证未完成"
           : "未运行验证";
-  return `${terminal} · ${validation}`;
+  return item.validationStatus === "not_needed" ? terminal : `${terminal} · ${validation}`;
 }
 
 export function Timeline({
@@ -82,6 +90,7 @@ export function Timeline({
   approvalAvailable = true,
   onVerify,
   onRepair,
+  onConfigureVerification,
   showRaw = false,
   working = null,
 }: TimelineProps) {
@@ -183,6 +192,8 @@ export function Timeline({
             ? "■"
             : item.status === "failed"
               ? "!"
+              : item.validationStatus === "not_needed"
+                ? "✓"
               : item.validationStatus === "passed"
                 ? "✓"
                 : item.validationStatus === "failed"
@@ -192,16 +203,30 @@ export function Timeline({
         <strong>{completionLabel(item)}</strong>
         {item.reason && item.reason !== "assistant completed" ? <small>{item.reason}</small> : null}
         {item.status === "completed" && item.validationStatus === "not_run" && item.turnId ? (
-          <button
-            type="button"
-            className="completion-action"
-            aria-label="验证此轮"
-            onClick={() => onVerify?.(item.turnId!)}
-          >
-            验证
-          </button>
+          item.verificationStatus === "not_configured" ? (
+            <button
+              type="button"
+              className="completion-action"
+              aria-label="配置验证规则"
+              onClick={() => onConfigureVerification?.()}
+            >
+              配置验证
+            </button>
+          ) : (
+            <button
+              type="button"
+              className="completion-action"
+              aria-label="验证此轮"
+              onClick={() => onVerify?.(item.turnId!)}
+            >
+              验证
+            </button>
+          )
         ) : null}
-        {["completed", "failed"].includes(item.status) && item.validationStatus === "failed" && item.turnId ? (
+        {["completed", "failed"].includes(item.status)
+          && (item.verificationStatus === "test_failed"
+            || (!item.verificationStatus && item.validationStatus === "failed"))
+          && item.turnId ? (
           <button
             type="button"
             className="completion-action is-repair"
@@ -209,6 +234,26 @@ export function Timeline({
             onClick={() => onRepair?.(item.turnId!)}
           >
             修复
+          </button>
+        ) : null}
+        {["approval_denied", "timed_out", "cancelled"].includes(item.verificationStatus ?? "") && item.turnId ? (
+          <button
+            type="button"
+            className="completion-action"
+            aria-label="重新验证此轮"
+            onClick={() => onVerify?.(item.turnId!)}
+          >
+            重试验证
+          </button>
+        ) : null}
+        {item.verificationStatus === "configuration_error" ? (
+          <button
+            type="button"
+            className="completion-action"
+            aria-label="修复验证配置"
+            onClick={() => onConfigureVerification?.()}
+          >
+            检查配置
           </button>
         ) : null}
       </div>,

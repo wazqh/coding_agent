@@ -10,7 +10,7 @@ test("collects one provider setup without exposing the API key as plain text", a
   render(<ModelManager busy={false} onConfigure={onConfigure} />);
 
   expect(screen.queryByLabelText("服务商模板")).not.toBeInTheDocument();
-  await user.click(screen.getByRole("button", { name: "添加连接" }));
+  await user.click(screen.getByRole("button", { name: "添加模型" }));
   await user.selectOptions(screen.getByLabelText("服务商模板"), "custom");
   await user.type(screen.getByLabelText("服务商名称"), "my-provider");
   await user.type(screen.getByLabelText("Base URL"), "https://models.example/v1");
@@ -18,7 +18,7 @@ test("collects one provider setup without exposing the API key as plain text", a
   await user.type(screen.getByLabelText("API Key"), "top-secret");
 
   expect(screen.getByLabelText("API Key")).toHaveAttribute("type", "password");
-  await user.click(screen.getByRole("button", { name: "保存并切换" }));
+  await user.click(screen.getByRole("button", { name: "保存模型" }));
 
   expect(onConfigure).toHaveBeenCalledWith({
     provider: "my-provider",
@@ -28,7 +28,7 @@ test("collects one provider setup without exposing the API key as plain text", a
     compatibility: "openai",
     preserveCredential: false,
   });
-  expect(await screen.findByText("配置已保存，正在重启并验证模型连接…"))
+  expect(await screen.findByText("模型已保存，正在重新加载连接…"))
     .toBeInTheDocument();
   expect(screen.queryByLabelText("服务商模板")).not.toBeInTheDocument();
 });
@@ -38,10 +38,10 @@ test("allows an existing provider environment variable to supply the API key", a
   const onConfigure = vi.fn(async () => ({ persisted: true, backend: "dpapi" }));
   render(<ModelManager busy={false} onConfigure={onConfigure} />);
 
-  await user.click(screen.getByRole("button", { name: "添加连接" }));
+  await user.click(screen.getByRole("button", { name: "添加模型" }));
   await user.selectOptions(screen.getByLabelText("服务商模板"), "gemini");
   await user.type(screen.getByLabelText("Model ID"), "gemini-2.5-flash");
-  await user.click(screen.getByRole("button", { name: "保存并切换" }));
+  await user.click(screen.getByRole("button", { name: "保存模型" }));
 
   expect(onConfigure).toHaveBeenCalledWith({
     provider: "gemini",
@@ -58,7 +58,7 @@ test("explains and corrects a full chat completions endpoint before saving", asy
   const onConfigure = vi.fn(async () => ({ persisted: true, backend: "dpapi" }));
   render(<ModelManager busy={false} onConfigure={onConfigure} />);
 
-  await user.click(screen.getByRole("button", { name: "添加连接" }));
+  await user.click(screen.getByRole("button", { name: "添加模型" }));
   await user.selectOptions(screen.getByLabelText("服务商模板"), "custom");
   await user.type(screen.getByLabelText("服务商名称"), "zhipu");
   await user.type(
@@ -69,7 +69,7 @@ test("explains and corrects a full chat completions endpoint before saving", asy
 
   expect(screen.getByText("这里应填写 API 根地址；Forge 会自动追加 /chat/completions。"))
     .toBeInTheDocument();
-  expect(screen.getByRole("button", { name: "保存并切换" })).toBeDisabled();
+  expect(screen.getByRole("button", { name: "保存模型" })).toBeDisabled();
   await user.click(screen.getByRole("button", { name: "改用建议地址" }));
 
   expect(screen.getByLabelText("Base URL")).toHaveValue("https://open.bigmodel.cn/api/paas/v4");
@@ -120,6 +120,52 @@ test("renders one manageable row per switchable model and edits the selected mod
     model: "glm-5.2-air",
     baseUrl: "https://open.bigmodel.cn/api/paas/v4",
     compatibility: "openai",
+  });
+});
+
+test("copies a model inside the same provider and asks only for a new model id", async () => {
+  const user = userEvent.setup();
+  const onConfigure = vi.fn(async () => ({ persisted: true, backend: "existing-provider" }));
+  render(
+    <ModelManager
+      busy={false}
+      onConfigure={onConfigure}
+      onUpdateModel={vi.fn(async () => undefined)}
+      onDeleteModel={vi.fn(async () => undefined)}
+      providers={[{
+        name: "gemini",
+        base_url: "https://generativelanguage.googleapis.com/v1beta/openai",
+        default_model: "gemini-3.5-flash",
+        models: ["gemini-3.5-flash"],
+        compatibility: "gemini",
+        managed: true,
+      }]}
+    />,
+  );
+
+  await user.click(screen.getByRole("button", { name: "复制 gemini / gemini-3.5-flash" }));
+
+  expect(screen.getByRole("heading", { name: "基于 gemini 添加模型" })).toBeInTheDocument();
+  expect(screen.getByLabelText("服务商名称")).toHaveValue("gemini");
+  expect(screen.getByLabelText("服务商名称")).toBeDisabled();
+  expect(screen.getByLabelText("Base URL"))
+    .toHaveValue("https://generativelanguage.googleapis.com/v1beta/openai");
+  expect(screen.getByLabelText("Base URL")).toBeDisabled();
+  expect(screen.getByLabelText("Model ID")).toHaveValue("");
+  expect(screen.getByLabelText("Model ID")).toHaveFocus();
+  expect(screen.queryByLabelText("API Key")).not.toBeInTheDocument();
+
+  await user.type(screen.getByLabelText("Model ID"), "gemini-3.7-flash");
+  await user.click(screen.getByRole("button", { name: "保存模型" }));
+
+  expect(onConfigure).toHaveBeenCalledWith({
+    provider: "gemini",
+    sourceProvider: "gemini",
+    baseUrl: "https://generativelanguage.googleapis.com/v1beta/openai",
+    model: "gemini-3.7-flash",
+    apiKey: "",
+    compatibility: "gemini",
+    preserveCredential: true,
   });
 });
 

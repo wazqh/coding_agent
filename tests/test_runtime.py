@@ -43,7 +43,7 @@ def test_runtime_factory_preserves_model_and_workspace_configuration(tmp_path: P
     )
     controller = runtime.create()
 
-    assert runtime.settings.agent.configured_max_steps == 24
+    assert runtime.settings.agent.configured_max_steps == 40
     assert runtime.settings.agent.max_steps == 48
     assert controller.settings.model.name == "gemini-pro"
     assert controller.settings.model.base_url == "https://gemini.example/v1"

@@ -154,7 +154,7 @@ test("confirms a maximum-step update after the runtime snapshot applies it", asy
           permissions: "prompt",
           model: { id: "gemini-flash" },
           context: { estimated_tokens: 0, context_window: 100000, percent_used: 0 },
-          steps: { current: 12, minimum: 12, maximum: 100, overridden: false },
+          steps: { current: 40, minimum: 30, maximum: 999, overridden: false },
         },
       },
     });
@@ -181,7 +181,7 @@ test("confirms a maximum-step update after the runtime snapshot applies it", asy
           permissions: "prompt",
           model: { id: "gemini-flash" },
           context: { estimated_tokens: 0, context_window: 100000, percent_used: 0 },
-          steps: { current: 40, minimum: 12, maximum: 100, overridden: true },
+          steps: { current: 40, minimum: 30, maximum: 999, overridden: true },
         },
       },
     });
@@ -222,12 +222,37 @@ test("separates command history from verification settings and saves its mode", 
           permissions: "prompt",
           model: { id: "gemini-flash" },
           context: { estimated_tokens: 0, context_window: 100000, percent_used: 0 },
-          steps: { current: 12, minimum: 12, maximum: 100, overridden: false },
+          steps: { current: 40, minimum: 30, maximum: 999, overridden: false },
           verification: {
+            mode: "agent_tdd",
             enabled: true,
             agent_tdd: true,
+            checks: [{
+              id: "python-tests",
+              label: "Python tests",
+              kind: "test",
+              command: "python -m pytest -q",
+              cwd: ".",
+              timeout_seconds: 120,
+              enabled: true,
+            }],
             commands: ["python -m pytest -q"],
-            suggested_commands: ["python -m pytest -q", "python -m ruff check ."],
+            suggestions: [{
+              id: "suggested-ruff",
+              label: "Ruff",
+              kind: "lint",
+              command: "python -m ruff check .",
+              cwd: ".",
+              timeout_seconds: 120,
+              enabled: true,
+              target_paths: ["."],
+              scope: "full_project",
+            }],
+            procedures: [{
+              id: "dependency-regression",
+              instruction: "依赖变化后重跑原有规则。",
+              enabled: true,
+            }],
           },
         },
       },
@@ -236,23 +261,51 @@ test("separates command history from verification settings and saves its mode", 
 
   expect(screen.getByRole("tab", { name: "命令记录" })).toBeInTheDocument();
   await user.click(screen.getByRole("tab", { name: "验证" }));
-  expect(screen.getByRole("switch", { name: "自动验证" })).toBeChecked();
-  expect(screen.getByRole("checkbox", { name: "Agent TDD" })).toBeChecked();
-  const input = screen.getByRole("textbox", { name: "项目验证命令" });
+  expect(screen.getByRole("radio", { name: /Agent TDD/ })).toHaveAttribute("aria-checked", "true");
+  const procedureHeading = screen.getByRole("heading", { name: "检验规程" });
+  const ruleHeading = screen.getByRole("heading", { name: "Agent 验证规则" });
+  expect(procedureHeading.compareDocumentPosition(ruleHeading) & Node.DOCUMENT_POSITION_FOLLOWING)
+    .toBeTruthy();
+  const input = screen.getByRole("textbox", { name: "验证命令 1" });
+  const cwd = screen.getByRole("textbox", { name: "工作目录 1" });
+  const timeout = screen.getByRole("spinbutton", { name: "超时秒数 1" });
   expect(input).toHaveValue("python -m pytest -q");
+  expect(cwd).toHaveValue(".");
+  expect(timeout).toHaveValue(120);
+  expect(screen.queryByRole("button", { name: "添加建议命令 python -m ruff check ." }))
+    .not.toBeInTheDocument();
+  await user.click(screen.getByRole("button", { name: "添加规则" }));
   expect(screen.getByRole("button", { name: "添加建议命令 python -m ruff check ." }))
     .toBeInTheDocument();
+  expect(screen.getByRole("textbox", { name: "检验规程 1" }))
+    .toHaveValue("依赖变化后重跑原有规则。");
   expect(screen.queryByRole("spinbutton", { name: "最大步骤" })).not.toBeInTheDocument();
   expect(screen.queryByRole("combobox", { name: "当前模型" })).not.toBeInTheDocument();
   await user.clear(input);
-  await user.click(screen.getByRole("button", { name: "添加建议命令 python -m ruff check ." }));
-  await user.type(input, "{Enter}python -m pytest -q");
+  await user.type(input, "python -m pytest tests -q");
+  await user.clear(cwd);
+  await user.type(cwd, "algorithm_practice");
+  await user.clear(timeout);
+  await user.type(timeout, "90");
   await user.click(screen.getByRole("button", { name: "保存验证设置" }));
 
   expect(transport.request).toHaveBeenCalledWith("verification.set", {
-    enabled: true,
-    agent_tdd: true,
-    commands: ["python -m ruff check .", "python -m pytest -q"],
+    mode: "agent_tdd",
+    checks: [{
+      id: "python-tests",
+      label: "Python tests",
+      kind: "test",
+      command: "python -m pytest tests -q",
+      cwd: "algorithm_practice",
+      timeout_seconds: 90,
+      enabled: true,
+      target_paths: [],
+    }],
+    procedures: [{
+      id: "dependency-regression",
+      instruction: "依赖变化后重跑原有规则。",
+      enabled: true,
+    }],
   });
   act(() => {
     transport.emit({
@@ -268,17 +321,32 @@ test("separates command history from verification settings and saves its mode", 
           permissions: "prompt",
           model: { id: "gemini-flash" },
           context: { estimated_tokens: 0, context_window: 100000, percent_used: 0 },
-          steps: { current: 12, minimum: 12, maximum: 100, overridden: false },
+          steps: { current: 40, minimum: 30, maximum: 999, overridden: false },
           verification: {
+            mode: "agent_tdd",
             enabled: true,
             agent_tdd: true,
-            commands: ["python -m ruff check .", "python -m pytest -q"],
+            checks: [{
+              id: "python-tests",
+              label: "Python tests",
+              kind: "test",
+              command: "python -m pytest tests -q",
+              cwd: "algorithm_practice",
+              timeout_seconds: 90,
+              enabled: true,
+            }],
+            commands: ["python -m pytest tests -q"],
+            procedures: [{
+              id: "dependency-regression",
+              instruction: "依赖变化后重跑原有规则。",
+              enabled: true,
+            }],
           },
         },
       },
     });
   });
-  expect(await screen.findByRole("status")).toHaveTextContent("自动验证已更新");
+  expect(await screen.findByRole("status")).toHaveTextContent("验证设置已保存到当前会话");
 });
 
 test("allows choosing Agent TDD before a verification command is configured", async () => {
@@ -313,12 +381,13 @@ test("allows choosing Agent TDD before a verification command is configured", as
           permissions: "prompt",
           model: { id: "gemini-flash" },
           context: { estimated_tokens: 0, context_window: 100000, percent_used: 0 },
-          steps: { current: 12, minimum: 12, maximum: 100, overridden: false },
+          steps: { current: 40, minimum: 30, maximum: 999, overridden: false },
           verification: {
-            enabled: true,
+            mode: "off",
+            enabled: false,
             agent_tdd: false,
             commands: [],
-            suggested_commands: ["python -m pytest -q"],
+            suggestions: [],
           },
         },
       },
@@ -326,10 +395,138 @@ test("allows choosing Agent TDD before a verification command is configured", as
   });
 
   await user.click(screen.getByRole("tab", { name: "验证" }));
-  const tdd = screen.getByRole("checkbox", { name: "Agent TDD" });
+  expect(screen.queryByRole("heading", { name: "验证规则" })).not.toBeInTheDocument();
+  expect(screen.queryByRole("heading", { name: "检验规程" })).not.toBeInTheDocument();
+  expect(screen.getByText("关闭后不会在回合结束时自动执行命令。"))
+    .toBeInTheDocument();
+  const tdd = screen.getByRole("radio", { name: /Agent TDD/ });
   expect(tdd).toBeEnabled();
   await user.click(tdd);
-  expect(tdd).toBeChecked();
+  expect(tdd).toHaveAttribute("aria-checked", "true");
+  expect(screen.getByRole("heading", { name: "检验规程" })).toBeInTheDocument();
+  expect(screen.getByRole("heading", { name: "Agent 验证规则" })).toBeInTheDocument();
+  expect(screen.getByText("先告诉 Agent 何时需要新增、重跑或收紧测试，再由它登记可执行规则。"))
+    .toBeInTheDocument();
+  await user.click(screen.getByRole("button", { name: "保存验证设置" }));
+  expect(transport.request).toHaveBeenCalledWith("verification.set", {
+    mode: "agent_tdd",
+    checks: [],
+    procedures: [],
+  });
+});
+
+test("turns verification off without hidden incomplete drafts blocking save", async () => {
+  const user = userEvent.setup();
+  const transport = new FakeTransport();
+  render(<App {...baseProps} transport={transport} store={createAgentStore()} />);
+  await waitFor(() => expect(transport.connect).toHaveBeenCalledOnce());
+
+  act(() => {
+    transport.emit({
+      protocol_version: 2,
+      type: "snapshot",
+      seq: 1,
+      session_id: "a".repeat(24),
+      turn_id: null,
+      data: { busy: false, model: "gemini-flash", permissions: "prompt" },
+    });
+    transport.emit({
+      protocol_version: 2,
+      type: "runtime.updated",
+      seq: 2,
+      session_id: "a".repeat(24),
+      turn_id: null,
+      data: {
+        runtime: {
+          workspace_name: "coding_agent",
+          workspace: "D:\\codes\\coding_agent",
+          permissions: "prompt",
+          model: { id: "gemini-flash" },
+          context: { estimated_tokens: 0, context_window: 100000, percent_used: 0 },
+          steps: { current: 40, minimum: 30, maximum: 999, overridden: false },
+          verification: {
+            mode: "off",
+            enabled: false,
+            agent_tdd: false,
+            checks: [],
+            commands: [],
+            suggestions: [],
+            procedures: [],
+          },
+        },
+      },
+    });
+  });
+
+  await user.click(screen.getByRole("button", { name: "任务检查器" }));
+  await user.click(screen.getByRole("tab", { name: "运行" }));
+  await user.click(screen.getByRole("tab", { name: "验证" }));
+  await user.click(screen.getByRole("radio", { name: /Agent TDD/ }));
+  await user.click(screen.getByRole("button", { name: "添加规程" }));
+  await user.click(screen.getByRole("button", { name: "添加规则" }));
+  await user.click(screen.getByRole("button", { name: "添加空白规则" }));
+  await user.click(screen.getByRole("radio", { name: /关闭/ }));
+  await user.click(screen.getByRole("button", { name: "保存验证设置" }));
+
+  expect(transport.request).toHaveBeenCalledWith("verification.set", {
+    mode: "off",
+    checks: [],
+    procedures: [],
+  });
+  expect(screen.queryByText("请补全每条验证规则的名称和命令")).not.toBeInTheDocument();
+  expect(screen.queryByText("请补全检验规程内容，或删除空白规程")).not.toBeInTheDocument();
+});
+
+test("shows the source and coverage of an Agent-registered verification rule", async () => {
+  const user = userEvent.setup();
+  const transport = new FakeTransport();
+  render(<App {...baseProps} transport={transport} store={createAgentStore()} />);
+  await waitFor(() => expect(transport.connect).toHaveBeenCalledOnce());
+
+  act(() => {
+    transport.emit({
+      protocol_version: 2,
+      type: "snapshot",
+      seq: 1,
+      session_id: "a".repeat(24),
+      turn_id: null,
+      data: { busy: false, model: "gemini-flash", permissions: "prompt" },
+    });
+  });
+  await user.click(screen.getByRole("button", { name: "任务检查器" }));
+  await user.click(screen.getByRole("tab", { name: "运行" }));
+  act(() => {
+    transport.emit({
+      protocol_version: 2,
+      type: "runtime.updated",
+      seq: 2,
+      session_id: "a".repeat(24),
+      turn_id: null,
+      data: {
+        runtime: {
+          verification: {
+            enabled: true,
+            agent_tdd: true,
+            checks: [{
+              id: "agent-algorithm-tests",
+              label: "Algorithm tests",
+              kind: "test",
+              command: "python -m pytest tests -q",
+              cwd: "algorithm_practice",
+              timeout_seconds: 90,
+              enabled: true,
+              source: "agent",
+              target_paths: ["algorithm_practice"],
+            }],
+          },
+        },
+      },
+    });
+  });
+
+  await user.click(screen.getByRole("tab", { name: "验证" }));
+  expect(screen.getByText("Agent 登记")).toBeInTheDocument();
+  expect(screen.getByText("覆盖 algorithm_practice")).toBeInTheDocument();
 });
 
 test("disables input after disconnect and offers reconnection", async () => {
@@ -436,33 +633,13 @@ test("creates or resumes sessions and requests changes for the contextual drawer
   expect(screen.queryByLabelText("src/demo.py 的变更")).not.toBeInTheDocument();
 
   await user.click(changeRow);
-  await user.click(screen.getByRole("button", { name: "查看文件" }));
-  expect(transport.request).toHaveBeenCalledWith("file.preview", { path: "src/demo.py" });
-  act(() => {
-    transport.emit({
-      protocol_version: 2,
-      type: "file.previewed",
-      seq: 3,
-      session_id: "a".repeat(24),
-      turn_id: null,
-      data: {
-        path: "src/demo.py",
-        language: "python",
-        size: 10,
-        text: "full file\n",
-      },
-    });
-  });
-  const previewFrame = screen.getByLabelText("src/demo.py 的变更");
-  expect(previewFrame).toHaveTextContent("full file");
-  expect(screen.queryByLabelText("src/demo.py 文件预览")).not.toBeInTheDocument();
-  await user.click(screen.getByRole("button", { name: "查看 Diff" }));
-  expect(previewFrame).toHaveTextContent("hello");
-  expect(previewFrame).not.toHaveTextContent("full file");
+  expect(screen.getByLabelText("src/demo.py 的变更")).toHaveTextContent("hello");
 
-  await user.click(screen.getByRole("button", { name: "撤销此变更" }));
-  await user.click(screen.getByRole("button", { name: "确认撤销" }));
-  expect(transport.request).toHaveBeenCalledWith("change.undo", { change_id: "a".repeat(32) });
+  await user.click(screen.getByRole("button", { name: "撤销改动" }));
+  expect(transport.request).toHaveBeenCalledWith("change.review", {
+    change_id: "a".repeat(32),
+    decision: "discard",
+  });
 });
 
 test("groups session files in a collapsible tree and previews the selected file", async () => {
@@ -545,7 +722,9 @@ test("groups session files in a collapsible tree and previews the selected file"
     });
   });
 
-  expect(screen.getByLabelText("src/demo.py 文件预览")).toHaveTextContent("def demo():");
+  expect(screen.getByRole("dialog", { name: "src/demo.py 文件预览" })).toHaveTextContent(
+    "def demo():",
+  );
   expect(screen.getByText("python · 18 B · 只读")).toBeInTheDocument();
 });
 
@@ -586,11 +765,13 @@ test("removes a recent project only after showing the exact safe scope", async (
     });
   });
 
-  await user.click(screen.getByRole("button", { name: "移除项目 demo" }));
+  await user.click(screen.getByRole("button", { name: "从 Forge 移除项目 demo" }));
   const dialog = screen.getByRole("alertdialog", { name: "移除项目demo" });
   expect(dialog).toHaveTextContent("D:\\codes\\demo");
-  expect(dialog).toHaveTextContent("不会删除工作目录、Git 文件、会话或 Memory");
-  await user.click(within(dialog).getByRole("button", { name: "移除" }));
+  expect(dialog).toHaveTextContent("不会删除工作区文件、Git 数据、会话或 Memory");
+  await user.click(
+    within(dialog).getByRole("button", { name: "确认从 Forge 移除 demo" }),
+  );
 
   expect(transport.request).toHaveBeenCalledWith("project.remove", {
     path: "D:\\codes\\demo",
@@ -644,10 +825,93 @@ test("keeps daily model switching separate from connection management", async ()
 
   await user.click(screen.getByRole("button", { name: "管理连接" }));
   expect(screen.queryByRole("combobox", { name: "当前模型" })).not.toBeInTheDocument();
-  expect(screen.getByText("模型连接")).toBeInTheDocument();
+  expect(screen.getByText("模型列表")).toBeInTheDocument();
 
   await user.click(screen.getByRole("button", { name: "完成" }));
   expect(screen.getByRole("combobox", { name: "当前模型" })).toBeInTheDocument();
+});
+
+test("copies a model inside its existing provider without copying its credential", async () => {
+  const user = userEvent.setup();
+  const transport = new FakeTransport();
+  const copyProviderCredential = vi.fn(async () => ({
+    persisted: true,
+    backend: "os-credential-copy",
+    transactionId: "copy-transaction",
+  }));
+  Object.defineProperty(window, "forgeDesktop", {
+    configurable: true,
+    value: {
+      runtimeInfo: vi.fn(),
+      selectWorkspace: vi.fn(),
+      saveProviderCredential: vi.fn(),
+      copyProviderCredential,
+      commitProviderCredential: vi.fn(async () => true),
+      rollbackProviderCredential: vi.fn(async () => true),
+      deleteProviderCredential: vi.fn(async () => undefined),
+      restartGateway: vi.fn(async () => undefined),
+      openExternal: vi.fn(),
+      minimize: vi.fn(),
+      toggleMaximize: vi.fn(),
+      close: vi.fn(),
+    },
+  });
+  render(<App {...baseProps} transport={transport} store={createAgentStore()} desktop />);
+  await waitFor(() => expect(transport.connect).toHaveBeenCalledOnce());
+  act(() => {
+    transport.emit({
+      protocol_version: 2,
+      type: "snapshot",
+      seq: 1,
+      session_id: "a".repeat(24),
+      turn_id: null,
+      data: {
+        workspace_name: "coding_agent",
+        workspace_path: "D:\\codes\\coding_agent",
+        model: "glm-5.3-flash",
+        permissions: "prompt",
+        busy: false,
+      },
+    });
+    transport.emit({
+      protocol_version: 2,
+      type: "model.catalog.updated",
+      seq: 2,
+      session_id: "a".repeat(24),
+      turn_id: null,
+      data: {
+        catalog: {
+          active: { provider: "GLM", id: "glm-5.3-flash" },
+          providers: [{
+            name: "GLM",
+            base_url: "https://open.bigmodel.cn/api/paas/v4",
+            default_model: "glm-5.3-flash",
+            models: ["glm-5.3-flash"],
+            managed: true,
+            active: true,
+          }],
+        },
+      },
+    });
+  });
+
+  await user.type(screen.getByRole("textbox", { name: "任务输入" }), "/model{Enter}");
+  await user.click(screen.getByRole("button", { name: "管理连接" }));
+  await user.click(screen.getByRole("button", { name: "复制 GLM / glm-5.3-flash" }));
+
+  expect(screen.getByLabelText("服务商名称")).toHaveValue("GLM");
+  expect(screen.getByLabelText("Model ID")).toHaveValue("");
+  await user.type(screen.getByLabelText("Model ID"), "glm-5.2-flash");
+  await user.click(screen.getByRole("button", { name: "保存模型" }));
+
+  expect(copyProviderCredential).not.toHaveBeenCalled();
+  expect(transport.request).toHaveBeenCalledWith("model.provider.upsert", {
+    provider: "GLM",
+    base_url: "https://open.bigmodel.cn/api/paas/v4",
+    model: "glm-5.2-flash",
+    compatibility: "openai",
+  });
+  Reflect.deleteProperty(window, "forgeDesktop");
 });
 
 test("configures a provider through desktop IPC without sending the API key over transport", async () => {
@@ -701,10 +965,10 @@ test("configures a provider through desktop IPC without sending the API key over
   await user.type(screen.getByRole("textbox", { name: "任务输入" }), "/model{Enter}");
   expect(screen.getByRole("tab", { name: "设置" })).toHaveAttribute("aria-selected", "true");
   await user.click(screen.getByRole("button", { name: "管理连接" }));
-  await user.click(screen.getByRole("button", { name: "添加连接" }));
+  await user.click(screen.getByRole("button", { name: "添加模型" }));
   await user.type(await screen.findByLabelText("Model ID"), "vendor/fast-model");
   await user.type(screen.getByLabelText("API Key"), "top-secret");
-  await user.click(screen.getByRole("button", { name: "保存并切换" }));
+  await user.click(screen.getByRole("button", { name: "保存模型" }));
 
   await waitFor(() => expect(saveProviderCredential).toHaveBeenCalledWith({
     provider: "openrouter",
@@ -786,10 +1050,10 @@ test("rolls back a staged provider credential when metadata persistence fails", 
 
   await user.type(screen.getByRole("textbox", { name: "任务输入" }), "/model{Enter}");
   await user.click(screen.getByRole("button", { name: "管理连接" }));
-  await user.click(screen.getByRole("button", { name: "添加连接" }));
+  await user.click(screen.getByRole("button", { name: "添加模型" }));
   await user.type(await screen.findByLabelText("Model ID"), "vendor/fast-model");
   await user.type(screen.getByLabelText("API Key"), "top-secret");
-  await user.click(screen.getByRole("button", { name: "保存并切换" }));
+  await user.click(screen.getByRole("button", { name: "保存模型" }));
   await waitFor(() => expect(transport.request).toHaveBeenCalledWith(
     "model.provider.upsert",
     expect.any(Object),
@@ -845,7 +1109,7 @@ test("shows project picker progress and restarts the desktop gateway for the sel
     "aria-busy",
     "true",
   );
-  expect(screen.getByRole("status")).toHaveTextContent("正在打开目录选择器…");
+  expect(screen.getByText("正在打开目录选择器…")).toBeInTheDocument();
 
   resolveSelection("D:\\codes\\selected-project");
   await waitFor(() =>
@@ -854,5 +1118,8 @@ test("shows project picker progress and restarts the desktop gateway for the sel
   act(() => transport.emitStatus("disconnected"));
   expect(screen.getByRole("status", { name: "正在切换项目" })).toBeInTheDocument();
   expect(screen.queryByRole("alert", { name: "无法连接本地 Agent" })).not.toBeInTheDocument();
-  act(() => finishRestart());
+  await act(async () => {
+    finishRestart();
+    await Promise.resolve();
+  });
 });

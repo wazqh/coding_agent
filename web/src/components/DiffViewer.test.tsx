@@ -61,7 +61,7 @@ test("summarizes changes and provides a deliberate empty state", () => {
 
   view.rerender(<ChangesSummary changes={[change]} onSelect={() => undefined} />);
   expect(screen.getByRole("button", { name: /src\/demo.py/ })).toBeInTheDocument();
-  expect(screen.getByText("Agent 修改 1 处")).toBeInTheDocument();
+  expect(screen.getByText("待审变更 1 项")).toBeInTheDocument();
 });
 
 test("uses one clear review action for keeping or reverting the displayed diff", async () => {
@@ -87,7 +87,7 @@ test("labels batch review with the same keep and revert vocabulary", () => {
     />,
   );
 
-  expect(screen.getByRole("button", { name: "全部接受" })).toBeInTheDocument();
+  expect(screen.getByRole("button", { name: "接受全部" })).toBeInTheDocument();
   expect(screen.getByRole("button", { name: "全部撤销" })).toBeInTheDocument();
   expect(screen.queryByRole("button", { name: "放弃全部" })).not.toBeInTheDocument();
 });

@@ -64,6 +64,7 @@ from coding_agent.web.protocol import (
     ViewEventType,
     parse_client_request,
 )
+from coding_agent.workspace_settings import VerificationCheck
 
 _CSP = (
     "default-src 'self'; base-uri 'none'; frame-ancestors 'none'; "
@@ -376,10 +377,20 @@ def _dispatch_request(coordinator: TurnCoordinator, request: object) -> None:
         )
         return
     if isinstance(request, VerificationSetRequest):
-        snapshot = coordinator.set_verification(
-            enabled=request.enabled,
-            agent_tdd=request.agent_tdd,
-            commands=request.commands,
+        checks = request.checks
+        if not checks and request.commands:
+            checks = [
+                VerificationCheck(
+                    id=f"legacy-{index}",
+                    label=f"Verification {index}",
+                    command=command,
+                )
+                for index, command in enumerate(request.commands, start=1)
+            ]
+        snapshot = coordinator.set_verification_contract(
+            mode=request.mode,
+            checks=checks,
+            procedures=request.procedures,
         )
         coordinator.emit(
             ViewEventType.RUNTIME_UPDATED,

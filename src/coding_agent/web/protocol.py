@@ -3,9 +3,12 @@ from __future__ import annotations
 from enum import StrEnum
 from typing import Annotated, Any, Literal, TypeAlias
 
-from pydantic import BaseModel, ConfigDict, Field, TypeAdapter, field_validator
+from pydantic import BaseModel, ConfigDict, Field, TypeAdapter, field_validator, model_validator
 
+from coding_agent.config import MAX_AGENT_STEPS, MIN_AGENT_STEPS
 from coding_agent.safety.approval import ApprovalDecision
+from coding_agent.verification import VerificationMode, VerificationProcedure
+from coding_agent.workspace_settings import VerificationCheck
 
 PROTOCOL_VERSION: Literal[2] = 2
 SESSION_PATTERN = r"^[0-9a-f]{24}$"
@@ -101,7 +104,7 @@ class StepsGetRequest(RequestFrame):
 
 class StepsSetRequest(RequestFrame):
     type: Literal["steps.set"]
-    value: int = Field(ge=12, le=100)
+    value: int = Field(ge=MIN_AGENT_STEPS, le=MAX_AGENT_STEPS)
 
 
 class StepsResetRequest(RequestFrame):
@@ -110,9 +113,35 @@ class StepsResetRequest(RequestFrame):
 
 class VerificationSetRequest(RequestFrame):
     type: Literal["verification.set"]
+    mode: VerificationMode = VerificationMode.OFF
     enabled: bool = False
     agent_tdd: bool = False
-    commands: list[str] = Field(max_length=8)
+    commands: list[str] = Field(default_factory=list, max_length=8)
+    checks: list[VerificationCheck] = Field(default_factory=list, max_length=8)
+    procedures: list[VerificationProcedure] = Field(default_factory=list, max_length=12)
+
+    @model_validator(mode="before")
+    @classmethod
+    def migrate_boolean_mode(cls, value: object) -> object:
+        if not isinstance(value, dict):
+            return value
+        payload = dict(value)
+        if "mode" not in payload:
+            enabled = payload.get("enabled") is True
+            payload["mode"] = (
+                VerificationMode.AGENT_TDD.value
+                if enabled and payload.get("agent_tdd") is True
+                else VerificationMode.CHECKS.value
+                if enabled
+                else VerificationMode.OFF.value
+            )
+        return payload
+
+    @model_validator(mode="after")
+    def expose_legacy_flags(self) -> VerificationSetRequest:
+        self.enabled = self.mode is not VerificationMode.OFF
+        self.agent_tdd = self.mode is VerificationMode.AGENT_TDD
+        return self
 
     @field_validator("commands")
     @classmethod

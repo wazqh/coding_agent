@@ -38,5 +38,8 @@ overwriting newer work.
 Hard-destructive commands are rejected before approval and cannot be enabled by `auto` permissions,
 verification settings, or GUI controls. Other writes and commands retain the ordinary approval,
 secret-stripped environment, timeout, output limit, cancellation, and process-tree termination
-boundaries. A UI defect or a model instruction must never be treated as authorization to weaken
-these checks.
+boundaries. Hard-rule matching is semantic: Forge checks the resolved executable, action flags,
+dry-run or `-WhatIf` state, target type, wrappers, and nested shell payloads. A risky word used as
+search text or a formatter subcommand is not itself a hard block. Encoded shell payloads remain
+blocked because they cannot be reviewed before execution. A UI defect or a model instruction must
+never be treated as authorization to weaken these checks.

@@ -56,6 +56,7 @@ def _record_change(
     after_sha256: str,
     diff: str,
     reversible: bool,
+    created_directories: list[str] | None = None,
 ) -> AppliedChange:
     change = AppliedChange(
         path=path,
@@ -64,6 +65,8 @@ def _record_change(
         after_sha256=after_sha256,
         diff=diff,
         reversible=reversible,
+        turn_id=context.turn_id,
+        created_directories=created_directories or [],
     )
     context.working.changes.append(change)
     context.working.diffs.append(diff)
@@ -354,6 +357,13 @@ class WriteFileTool(Tool):
             return ToolResult(ok=False, code="TOO_LARGE", summary="content exceeds 2 MiB")
         path = context.workspace.resolve(values.path, must_exist=False, file_only=True)
         exists = path.exists()
+        created_directories: list[str] = []
+        if not exists:
+            current = path.parent
+            while current != context.workspace.root and not current.exists():
+                created_directories.append(context.workspace.display(current))
+                current = current.parent
+            created_directories.reverse()
         before = _read_text(path) if exists else ""
         actual_hash = sha256_text(before) if exists else None
         expected_hash = values.expected_sha256
@@ -408,6 +418,7 @@ class WriteFileTool(Tool):
             after_sha256=new_hash,
             diff=patch,
             reversible=not truncated,
+            created_directories=created_directories,
         )
         return ToolResult(
             ok=True,
@@ -420,6 +431,7 @@ class WriteFileTool(Tool):
                 "change_id": change.id,
                 "change_kind": change.kind,
                 "reversible": change.reversible,
+                "created_directories": created_directories,
             },
             truncated=truncated,
         )

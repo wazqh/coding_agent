@@ -268,7 +268,7 @@ def main(
                 workspace=controller.settings.cwd,
             ),
             configured_max_steps=getattr(
-                getattr(controller.settings, "agent", None), "configured_max_steps", 24
+                getattr(controller.settings, "agent", None), "configured_max_steps", 40
             ),
         )
         raise typer.Exit(shell.run())
@@ -402,7 +402,7 @@ def resume_command(
                 workspace=controller.settings.cwd,
             ),
             configured_max_steps=getattr(
-                getattr(controller.settings, "agent", None), "configured_max_steps", 24
+                getattr(controller.settings, "agent", None), "configured_max_steps", 40
             ),
         )
         raise typer.Exit(shell.run())

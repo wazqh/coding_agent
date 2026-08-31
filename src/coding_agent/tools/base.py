@@ -13,6 +13,7 @@ from coding_agent.safety.paths import WorkspacePaths
 
 if TYPE_CHECKING:
     from coding_agent.skills import SkillRegistry
+    from coding_agent.workspace_settings import VerificationCheck
 
 
 class AppliedChange(BaseModel):
@@ -24,6 +25,8 @@ class AppliedChange(BaseModel):
     after_sha256: str
     reversible: bool = True
     review_status: Literal["pending", "accepted", "conflicted"] = "pending"
+    turn_id: str | None = Field(default=None, exclude=True)
+    created_directories: list[str] = Field(default_factory=list)
 
 
 class WorkingState(BaseModel):
@@ -54,6 +57,9 @@ class ToolContext:
         skills: SkillRegistry | None = None,
         cancel_requested: Callable[[], bool] | None = None,
         operation_id: str | None = None,
+        verification_registrar: Callable[[VerificationCheck], VerificationCheck] | None = None,
+        verification_runner: Callable[[str, str | None], ToolResult] | None = None,
+        verification_command: tuple[str, str] | None = None,
     ) -> None:
         self.workspace = workspace
         self.approval = approval
@@ -65,6 +71,9 @@ class ToolContext:
         self.skills = skills
         self.cancel_requested = cancel_requested or (lambda: False)
         self.operation_id = operation_id
+        self.verification_registrar = verification_registrar
+        self.verification_runner = verification_runner
+        self.verification_command = verification_command
 
     def emit(
         self,
@@ -106,6 +115,34 @@ class ToolContext:
             state=AgentState.EXECUTING,
         )
         return decision is not ApprovalDecision.DENY and not self.cancel_requested()
+
+    def register_verification(self, check: VerificationCheck) -> VerificationCheck:
+        if self.verification_registrar is None:
+            raise ValueError("verification registration is unavailable")
+        return self.verification_registrar(check)
+
+    def run_verification(self, rule_id: str) -> ToolResult:
+        if self.verification_runner is None:
+            raise ValueError("verification execution is unavailable")
+        return self.verification_runner(rule_id, self.operation_id)
+
+    def is_verification_command_authorized(self, command: str, cwd: str) -> bool:
+        """Return whether this context represents the exact saved verification rule.
+
+        Saving a rule is explicit authorization for that one command in that one workspace
+        directory.  The command tool still applies hard safety rules before consulting this
+        authorization.
+        """
+
+        if self.verification_command is None:
+            return False
+        expected_command, expected_cwd = self.verification_command
+        if command.strip() != expected_command.strip():
+            return False
+        try:
+            return self.workspace.resolve(cwd) == self.workspace.resolve(expected_cwd)
+        except ValueError:
+            return False
 
 
 class EmptyArgs(BaseModel):

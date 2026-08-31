@@ -1,10 +1,20 @@
 from __future__ import annotations
 
 import json
+from collections.abc import Sequence
 from pathlib import Path
+from typing import Literal
 
-from pydantic import BaseModel, ConfigDict, Field, ValidationError, field_validator
+from pydantic import (
+    BaseModel,
+    ConfigDict,
+    Field,
+    ValidationError,
+    field_validator,
+    model_validator,
+)
 
+from coding_agent.config import MAX_AGENT_STEPS, MIN_AGENT_STEPS
 from coding_agent.project import project_id
 from coding_agent.safety.paths import atomic_write_text
 
@@ -13,30 +23,89 @@ class WorkspaceSettingsError(ValueError):
     pass
 
 
+class VerificationCheck(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    id: str = Field(min_length=1, max_length=64, pattern=r"^[A-Za-z0-9][A-Za-z0-9._-]*$")
+    label: str = Field(min_length=1, max_length=120)
+    kind: Literal["test", "build", "lint", "typecheck", "custom"] = "custom"
+    command: str
+    cwd: str = "."
+    timeout_seconds: int = Field(default=120, ge=1, le=3600)
+    enabled: bool = True
+    source: Literal["user", "agent"] = "user"
+    target_paths: list[str] = Field(default_factory=list, max_length=32)
+
+    @field_validator("label", "command")
+    @classmethod
+    def validate_single_line_text(cls, value: str) -> str:
+        normalized = value.strip()
+        if not normalized or len(normalized) > 20_000 or "\n" in normalized or "\r" in normalized:
+            raise ValueError("verification text must be a non-empty single-line value")
+        return normalized
+
+    @field_validator("cwd")
+    @classmethod
+    def validate_cwd(cls, cwd: str) -> str:
+        normalized = cwd.strip() or "."
+        path = Path(normalized)
+        if path.is_absolute() or path.root or path.drive or ".." in path.parts:
+            raise ValueError("verification cwd must stay inside the workspace")
+        return path.as_posix()
+
+    @field_validator("target_paths")
+    @classmethod
+    def validate_target_paths(cls, paths: list[str]) -> list[str]:
+        normalized: list[str] = []
+        for raw_path in paths:
+            value = raw_path.strip() or "."
+            path = Path(value)
+            if path.is_absolute() or path.root or path.drive or ".." in path.parts:
+                raise ValueError("verification target paths must stay inside the workspace")
+            display = path.as_posix()
+            if display not in normalized:
+                normalized.append(display)
+        return normalized
+
+
 class VerificationSettings(BaseModel):
     model_config = ConfigDict(extra="forbid")
     enabled: bool = False
     agent_tdd: bool = False
-    commands: list[str] = Field(default_factory=list, max_length=8)
+    checks: list[VerificationCheck] = Field(default_factory=list, max_length=8)
 
-    @field_validator("commands")
+    @model_validator(mode="before")
     @classmethod
-    def validate_commands(cls, commands: list[str]) -> list[str]:
-        normalized: list[str] = []
-        for command in commands:
-            value = command.strip()
-            if not value or len(value) > 20_000 or "\n" in value or "\r" in value:
-                raise ValueError(
-                    "verification commands must be non-empty single-line values "
-                    "of at most 20000 characters"
-                )
-            normalized.append(value)
-        return normalized
+    def migrate_legacy_commands(cls, value: object) -> object:
+        if not isinstance(value, dict):
+            return value
+        payload = dict(value)
+        commands = payload.pop("commands", None)
+        if "checks" not in payload and isinstance(commands, list):
+            payload["checks"] = [
+                {
+                    "id": f"legacy-{index}",
+                    "label": f"Verification {index}",
+                    "kind": "custom",
+                    "command": command,
+                    "cwd": ".",
+                }
+                for index, command in enumerate(commands, start=1)
+            ]
+        return payload
+
+    @property
+    def commands(self) -> list[str]:
+        return [check.command for check in self.checks if check.enabled]
 
 
 class WorkspaceSettings(BaseModel):
     model_config = ConfigDict(extra="forbid")
-    max_steps: int | None = Field(default=None, ge=12, le=100)
+    max_steps: int | None = Field(
+        default=None,
+        ge=MIN_AGENT_STEPS,
+        le=MAX_AGENT_STEPS,
+    )
     verification: VerificationSettings = Field(default_factory=VerificationSettings)
 
 
@@ -53,7 +122,9 @@ class WorkspaceSettingsStore:
             if isinstance(value, dict) and isinstance(value.get("verification"), dict):
                 verification = value["verification"]
                 if "enabled" not in verification:
-                    verification["enabled"] = bool(verification.get("commands"))
+                    verification["enabled"] = bool(
+                        verification.get("checks") or verification.get("commands")
+                    )
                 verification.setdefault("agent_tdd", False)
             return WorkspaceSettings.model_validate(value)
         except (OSError, json.JSONDecodeError, ValidationError) as exc:
@@ -64,8 +135,10 @@ class WorkspaceSettingsStore:
         atomic_write_text(self.path, json.dumps(payload, indent=2) + "\n")
 
     def set_max_steps(self, value: int) -> None:
-        if not 12 <= value <= 100:
-            raise WorkspaceSettingsError("max steps must be between 12 and 100")
+        if not MIN_AGENT_STEPS <= value <= MAX_AGENT_STEPS:
+            raise WorkspaceSettingsError(
+                f"max steps must be between {MIN_AGENT_STEPS} and {MAX_AGENT_STEPS}"
+            )
         settings = self.load()
         settings.max_steps = value
         self._save(settings)
@@ -90,17 +163,69 @@ class WorkspaceSettingsStore:
         agent_tdd: bool,
         commands: list[str],
     ) -> None:
+        checks: list[dict[str, object]] = [
+            {
+                "id": f"legacy-{index}",
+                "label": f"Verification {index}",
+                "command": command,
+            }
+            for index, command in enumerate(commands, start=1)
+        ]
+        self.set_verification_checks(
+            enabled=enabled,
+            agent_tdd=agent_tdd,
+            checks=checks,
+        )
+
+    def set_verification_checks(
+        self,
+        *,
+        enabled: bool,
+        agent_tdd: bool,
+        checks: Sequence[VerificationCheck | dict[str, object]],
+    ) -> None:
         try:
+            validated_checks = [VerificationCheck.model_validate(check) for check in checks]
             verification = VerificationSettings(
                 enabled=enabled,
                 agent_tdd=agent_tdd,
-                commands=commands,
+                checks=validated_checks,
             )
         except ValidationError as exc:
             raise WorkspaceSettingsError(f"invalid verification configuration: {exc}") from exc
         settings = self.load()
         settings.verification = verification
         self._save(settings)
+
+    def upsert_verification_check(
+        self,
+        check: VerificationCheck | dict[str, object],
+        *,
+        enable_verification: bool,
+        agent_tdd: bool | None = None,
+    ) -> VerificationCheck:
+        settings = self.load()
+        try:
+            validated = VerificationCheck.model_validate(check)
+            checks = list(settings.verification.checks)
+            match = next(
+                (index for index, current in enumerate(checks) if current.id == validated.id),
+                None,
+            )
+            if match is None:
+                checks.append(validated)
+            else:
+                checks[match] = validated
+            verification = VerificationSettings(
+                enabled=settings.verification.enabled or enable_verification,
+                agent_tdd=(settings.verification.agent_tdd if agent_tdd is None else agent_tdd),
+                checks=checks,
+            )
+        except ValidationError as exc:
+            raise WorkspaceSettingsError(f"invalid verification configuration: {exc}") from exc
+        settings.verification = verification
+        self._save(settings)
+        return validated
 
     def reset_verification_commands(self) -> None:
         settings = self.load()

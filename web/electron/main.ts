@@ -20,7 +20,12 @@ import { resolvePreloadPath } from "./preloadPath.js";
 import { buildGatewayEnvironment } from "./pythonEnvironment.js";
 import { credentialNameToReference, PythonCredentialBridge } from "./pythonCredentialBridge.js";
 import { projectTrustChoice } from "./projectTrust.js";
-import type { DesktopRuntimeInfo, ProviderCredentialInput, RestartGatewayInput } from "./types.js";
+import type {
+  DesktopRuntimeInfo,
+  ProviderCredentialCopyInput,
+  ProviderCredentialInput,
+  RestartGatewayInput,
+} from "./types.js";
 import { installWindowPolicy, isExternalHttpUrl } from "./windowPolicy.js";
 import { resolveConfiguredWorkspace } from "./workspaceConfig.js";
 
@@ -181,6 +186,19 @@ function installIpc(window: BrowserWindow): void {
     }
     const credential = resolveProviderCredential(input.provider, input.apiKey);
     return credentialTransactions.stage(providerCredentialName(input.provider), credential);
+  });
+  ipcMain.handle("desktop:copy-provider-credential", async (event, value: unknown) => {
+    if (!fromWindow(event) || typeof value !== "object" || value === null) {
+      throw new Error("Invalid credential request");
+    }
+    const input = value as Partial<ProviderCredentialCopyInput>;
+    if (typeof input.sourceProvider !== "string" || typeof input.targetProvider !== "string") {
+      throw new Error("Invalid credential request");
+    }
+    return credentialTransactions.stageCopy(
+      providerCredentialName(input.sourceProvider),
+      providerCredentialName(input.targetProvider),
+    );
   });
   ipcMain.handle("desktop:commit-provider-credential", async (event, value: unknown) => {
     if (!fromWindow(event)) throw new Error("Invalid credential request");

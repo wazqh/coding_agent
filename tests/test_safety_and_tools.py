@@ -3,12 +3,13 @@ from __future__ import annotations
 import os
 import sys
 import time
+from collections.abc import Callable
 from pathlib import Path
 
 import pytest
 
 from coding_agent.events import ToolResult
-from coding_agent.safety.approval import ApprovalDecision, ApprovalPolicy
+from coding_agent.safety.approval import ApprovalDecision, ApprovalPolicy, ApprovalRequest
 from coding_agent.safety.commands import CommandPolicy, run_subprocess, sanitized_environment
 from coding_agent.safety.paths import PathSafetyError, WorkspacePaths, sha256_file
 from coding_agent.tools import filesystem as filesystem_tools
@@ -16,13 +17,21 @@ from coding_agent.tools.base import ToolContext, WorkingState
 from coding_agent.tools.registry import default_registry
 
 
-def context(root: Path, *, mode: str = "auto", interactive: bool = True) -> ToolContext:
+def context(
+    root: Path,
+    *,
+    mode: str = "auto",
+    interactive: bool = True,
+    approval_callback: Callable[[ApprovalRequest], ApprovalDecision] | None = None,
+    verification_command: tuple[str, str] | None = None,
+) -> ToolContext:
     return ToolContext(
         workspace=WorkspacePaths(root),
-        approval=ApprovalPolicy(mode, interactive=interactive),
+        approval=ApprovalPolicy(mode, interactive=interactive, callback=approval_callback),
         session_id="a" * 24,
         turn_id="turn",
         working=WorkingState(),
+        verification_command=verification_command,
     )
 
 
@@ -285,6 +294,10 @@ def test_command_policy_secret_filter_and_execution(tmp_path: Path) -> None:
     assert not policy.classify("Remove-Item x -Recurse").allowed
     assert not policy.classify("shutdown /s").allowed
     assert not policy.classify("git status; shutdown /s").allowed
+    assert not policy.classify("format C:").allowed
+    assert not policy.classify("cmd /c format D:").allowed
+    assert policy.classify("python -m ruff format --check .").allowed
+    assert policy.classify("ruff format --check .").approval_required
     assert policy.classify("git status; echo x").approval_required
     assert not policy.classify("git status").approval_required
     assert policy.classify("pytest -q").approval_required
@@ -293,6 +306,164 @@ def test_command_policy_secret_filter_and_execution(tmp_path: Path) -> None:
     command = f'"{sys.executable}" -c "print(123)"'
     result = run_subprocess(command, cwd=tmp_path, timeout=10, environ=os.environ)
     assert result["exit_code"] == 0 and "123" in result["stdout"]
+
+
+@pytest.mark.parametrize(
+    "command",
+    [
+        'echo "git reset --hard HEAD"',
+        "echo rm -rf build",
+        "python -c \"print('shutdown')\"",
+        "python -m ruff format --check .",
+        "ruff format --check .",
+        "npm run format",
+        "git show --format=fuller HEAD",
+        "git clean -nfd",
+        "git clean --dry-run --force -d",
+        "Remove-Item build -Recurse -WhatIf",
+        "Remove-Item build -Recurse:$false",
+        "dd if=image.bin of=backup.img",
+        "mkfs.ext4 filesystem.img",
+        "systemctl status",
+        "systemctl --dry-run reboot",
+        "shutdown /a",
+        "shutdown -c",
+        "Stop-Computer -WhatIf",
+        "wipefs --no-act /dev/sda",
+        "Clear-Disk -Number 0 -WhatIf",
+        "powershell -Command \"Write-Host 'shutdown /s'\"",
+        "bash -c 'echo rm -rf build'",
+        'rg "Remove-Item.*-Recurse" .',
+    ],
+)
+def test_command_policy_does_not_block_danger_words_used_as_data(command: str) -> None:
+    classification = CommandPolicy().classify(command)
+
+    assert classification.allowed is True
+    assert classification.rule_id is None
+
+
+@pytest.mark.parametrize(
+    ("command", "rule_id"),
+    [
+        ("git -C repo reset --hard HEAD", "git-reset-hard"),
+        ("sudo git clean -fd", "git-clean-force"),
+        ("git clean --force -d", "git-clean-force"),
+        ("echo ok && rm -rf build", "recursive-delete"),
+        ("Remove-Item build -Recurse:$true -Force", "recursive-delete"),
+        ('powershell -Command "Get-ChildItem x | Remove-Item -Recurse -Force"', "recursive-delete"),
+        ('cmd /c "format C:"', "disk-format"),
+        ("Format-Volume -DriveLetter C -Force", "disk-format"),
+        ("mkfs.ext4 /dev/sda1", "disk-format"),
+        ("Clear-Disk -Number 0 -RemoveData", "direct-disk-write"),
+        ("bash -c 'shutdown -h now'", "system-power"),
+        ("systemctl reboot", "system-power"),
+        ("init 0", "system-power"),
+        ("dd if=image.bin of=/dev/sda", "direct-disk-write"),
+        ("wipefs --all /dev/sda", "direct-disk-write"),
+        ("tee /dev/sda", "direct-disk-write"),
+        ("Set-Content -Path \\\\.\\PhysicalDrive0 -Value x", "direct-disk-write"),
+        ("powershell -EncodedCommand ZABpAHIA", "encoded-shell-payload"),
+        ('eval "rm -rf build"', "recursive-delete"),
+        ("xargs rm -rf", "recursive-delete"),
+        ("find . -exec rm -rf {} +", "recursive-delete"),
+        ('Invoke-Expression "Remove-Item build -Recurse"', "recursive-delete"),
+        (":(){ :|:& };:", "fork-bomb"),
+    ],
+)
+def test_command_policy_blocks_semantic_destructive_invocations(
+    command: str,
+    rule_id: str,
+) -> None:
+    classification = CommandPolicy().classify(command)
+
+    assert classification.allowed is False
+    assert classification.rule_id == rule_id
+    assert classification.matched_text
+
+
+def test_run_command_executes_in_a_confined_workspace_relative_directory(
+    tmp_path: Path,
+) -> None:
+    nested = tmp_path / "algorithm_practice"
+    nested.mkdir()
+    command = f'"{sys.executable}" -c "import os; print(os.getcwd())"'
+
+    result = default_registry().execute(
+        "run_command",
+        {"command": command, "cwd": "algorithm_practice"},
+        context(tmp_path),
+    )
+
+    assert result.ok is True
+    assert result.data["cwd"] == "algorithm_practice"
+    assert str(nested.resolve()) in result.data["stdout"]
+
+
+def test_saved_verification_rule_authorizes_only_its_exact_command_and_cwd(
+    tmp_path: Path,
+) -> None:
+    nested = tmp_path / "feature"
+    nested.mkdir()
+    command = f'"{sys.executable}" -c "print(\'verified\')"'
+    approvals: list[object] = []
+    ctx = context(
+        tmp_path,
+        mode="prompt",
+        approval_callback=lambda request: approvals.append(request) or ApprovalDecision.DENY,
+        verification_command=(command, "feature"),
+    )
+
+    exact = default_registry().execute(
+        "run_command",
+        {"command": command, "cwd": "feature"},
+        ctx,
+    )
+    wrong_cwd = default_registry().execute(
+        "run_command",
+        {"command": command, "cwd": "."},
+        ctx,
+    )
+
+    assert exact.ok is True
+    assert exact.data["stdout"].strip() == "verified"
+    assert wrong_cwd.code == "APPROVAL_DENIED"
+    assert len(approvals) == 1
+
+
+def test_saved_verification_rule_never_overrides_a_hard_safety_block(tmp_path: Path) -> None:
+    approvals: list[object] = []
+    ctx = context(
+        tmp_path,
+        mode="prompt",
+        approval_callback=lambda request: approvals.append(request) or ApprovalDecision.ALLOW_ONCE,
+        verification_command=("git clean -fd", "."),
+    )
+
+    result = default_registry().execute(
+        "run_command",
+        {"command": "git clean -fd", "cwd": "."},
+        ctx,
+    )
+
+    assert result.code == "DANGEROUS_COMMAND"
+    assert result.data["hard_blocked"] is True
+    assert approvals == []
+
+
+@pytest.mark.parametrize("cwd", ["../outside", "/tmp", "C:\\outside"])
+def test_run_command_rejects_working_directories_outside_workspace(
+    tmp_path: Path,
+    cwd: str,
+) -> None:
+    result = default_registry().execute(
+        "run_command",
+        {"command": "python -m pytest -q", "cwd": cwd},
+        context(tmp_path),
+    )
+
+    assert result.code == "TOOL_ERROR"
+    assert any(term in result.summary for term in ("workspace", "absolute", "cannot resolve"))
 
 
 def test_command_timeout_output_bound_and_tool_rejection(tmp_path: Path) -> None:
@@ -332,6 +503,7 @@ def test_command_timeout_output_bound_and_tool_rejection(tmp_path: Path) -> None
     assert denied.code == "DANGEROUS_COMMAND"
     assert denied.data == {
         "command": "git clean -fd",
+        "cwd": ".",
         "hard_blocked": True,
         "rule_id": "git-clean-force",
         "risk_label": "强制清理 Git 工作区",
@@ -362,3 +534,20 @@ def test_registry_argument_and_unknown_errors(tmp_path: Path) -> None:
     assert unknown.code == "UNKNOWN_TOOL"
     assert invalid.code == "INVALID_ARGUMENTS"
     assert all(isinstance(item, ToolResult) for item in (unknown, invalid))
+    invalid.model_dump_json()
+
+
+def test_default_registry_exposes_structured_verification_registration() -> None:
+    registry = default_registry()
+
+    assert "register_verification" in registry.names()
+    schema = next(
+        item for item in registry.schemas() if item["function"]["name"] == "register_verification"
+    )
+    properties = schema["function"]["parameters"]["properties"]
+    assert {"command", "cwd", "target_paths", "timeout_seconds"} <= properties.keys()
+    assert "run_verify" in registry.names()
+    run_schema = next(
+        item for item in registry.schemas() if item["function"]["name"] == "run_verify"
+    )
+    assert set(run_schema["function"]["parameters"]["properties"]) == {"rule_id"}

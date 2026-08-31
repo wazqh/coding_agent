@@ -3,10 +3,14 @@ from __future__ import annotations
 import os
 import tomllib
 from pathlib import Path
-from typing import Any
+from typing import Any, Final, Literal
 
 from platformdirs import user_data_path
 from pydantic import BaseModel, ConfigDict, Field, PrivateAttr, ValidationError
+
+MIN_AGENT_STEPS: Final[Literal[30]] = 30
+MAX_AGENT_STEPS: Final[Literal[999]] = 999
+DEFAULT_AGENT_STEPS: Final[Literal[40]] = 40
 
 
 class ConfigError(ValueError):
@@ -15,11 +19,11 @@ class ConfigError(ValueError):
 
 class AgentSettings(BaseModel):
     model_config = ConfigDict(extra="forbid")
-    max_steps: int = Field(default=24, ge=12, le=100)
+    max_steps: int = Field(default=DEFAULT_AGENT_STEPS, ge=MIN_AGENT_STEPS, le=MAX_AGENT_STEPS)
     max_seconds: int = Field(default=600, ge=10, le=3600)
     context_window: int = Field(default=32768, ge=4096)
     command_timeout: int = Field(default=120, ge=1, le=300)
-    _configured_max_steps: int = PrivateAttr(default=24)
+    _configured_max_steps: int = PrivateAttr(default=DEFAULT_AGENT_STEPS)
 
     @property
     def configured_max_steps(self) -> int:

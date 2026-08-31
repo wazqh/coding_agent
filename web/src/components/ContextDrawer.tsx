@@ -8,6 +8,9 @@ import type {
   RuntimeState,
   SkillsState,
   TimelineItem,
+  VerificationCheckState,
+  VerificationModeState,
+  VerificationProcedureState,
 } from "../state/store";
 import { ChangesSummary } from "./ChangesSummary";
 import { ChangeReviewPane } from "./ChangeReviewPane";
@@ -20,6 +23,24 @@ import { StructuredToolDetail } from "./StructuredToolDetail";
 import { SkillCreator } from "./SkillCreator";
 
 export type InspectorTab = "changes" | "run" | "settings" | "resources" | "context";
+
+function checksFromRuntime(runtime: RuntimeState | null): VerificationCheckState[] {
+  if (runtime?.verification?.checks?.length) {
+    return runtime.verification.checks.map((check) => ({
+      ...check,
+      target_paths: check.target_paths ?? [],
+    }));
+  }
+  return (runtime?.verification?.commands ?? []).map((command, index) => ({
+    id: `legacy-${index + 1}`,
+    label: `验证 ${index + 1}`,
+    kind: "custom",
+    command,
+    cwd: ".",
+    timeout_seconds: 120,
+    enabled: true,
+  }));
+}
 
 interface ContextDrawerProps {
   width: number;
@@ -57,9 +78,9 @@ interface ContextDrawerProps {
   onStepsChange: (value: number) => boolean | void;
   onStepsReset: () => boolean | void;
   onVerificationChange: (config: {
-    enabled: boolean;
-    agentTdd: boolean;
-    commands: string[];
+    mode: VerificationModeState;
+    checks: VerificationCheckState[];
+    procedures: VerificationProcedureState[];
   }) => boolean | void;
   onMemoryList: () => void;
   onMemoryToggle: (enabled: boolean) => void;
@@ -124,29 +145,28 @@ export function ContextDrawer(props: ContextDrawerProps) {
   const [skillQuery, setSkillQuery] = useState("");
   const [memoryDraft, setMemoryDraft] = useState("");
   const [clearArmed, setClearArmed] = useState(false);
-  const [stepDraft, setStepDraft] = useState(String(runtime?.steps?.current ?? 24));
+  const [stepDraft, setStepDraft] = useState(String(runtime?.steps?.current ?? 40));
   const [pendingStepAction, setPendingStepAction] = useState<
     { kind: "set"; value: number } | { kind: "reset" } | null
   >(null);
   const [stepFeedback, setStepFeedback] = useState<
     { state: "idle" | "saving" | "saved" | "error"; message: string }
   >({ state: "idle", message: "" });
-  const [verificationDraft, setVerificationDraft] = useState(
-    (runtime?.verification?.commands ?? []).join("\n"),
+  const [verificationChecks, setVerificationChecks] = useState<VerificationCheckState[]>(
+    checksFromRuntime(runtime),
   );
-  const [verificationEnabled, setVerificationEnabled] = useState(
-    runtime?.verification?.enabled ?? false,
+  const [verificationMode, setVerificationMode] = useState<VerificationModeState>(
+    runtime?.verification?.mode
+      ?? (runtime?.verification?.agent_tdd ? "agent_tdd" : runtime?.verification?.enabled ? "checks" : "off"),
   );
-  const [verificationAgentTdd, setVerificationAgentTdd] = useState(
-    runtime?.verification?.agent_tdd ?? false,
+  const [verificationProcedures, setVerificationProcedures] = useState<VerificationProcedureState[]>(
+    runtime?.verification?.procedures ?? [],
   );
   const [verificationPending, setVerificationPending] = useState<string | null>(null);
   const [verificationFeedback, setVerificationFeedback] = useState("");
-  const verificationCommands = useMemo(
-    () => verificationDraft.split(/\r?\n/).map((command) => command.trim()).filter(Boolean),
-    [verificationDraft],
-  );
-  const verificationSuggestions = runtime?.verification?.suggested_commands ?? [];
+  const [verificationRulePickerOpen, setVerificationRulePickerOpen] = useState(false);
+  const verificationSuggestions = runtime?.verification?.suggestions ?? [];
+  const workspaceVerificationTemplates = runtime?.verification?.workspace_templates ?? [];
   const [modelManagerOpen, setModelManagerOpen] = useState(props.openModelManager ?? false);
   const pendingChanges = useMemo(
     () => changes.filter((change) => change.reviewStatus !== "accepted"),
@@ -203,22 +223,30 @@ export function ContextDrawer(props: ContextDrawerProps) {
   }, [tab]);
 
   useEffect(() => {
-    setStepDraft(String(runtime?.steps?.current ?? 24));
+    setStepDraft(String(runtime?.steps?.current ?? 40));
   }, [runtime?.steps?.current]);
 
   useEffect(() => {
-    const commands = (runtime?.verification?.commands ?? []).join("\n");
-    const enabled = runtime?.verification?.enabled ?? false;
-    const agentTdd = runtime?.verification?.agent_tdd ?? false;
-    const current = JSON.stringify({ enabled, agentTdd, commands });
-    setVerificationDraft(commands);
-    setVerificationEnabled(enabled);
-    setVerificationAgentTdd(agentTdd);
+    const checks = checksFromRuntime(runtime);
+    const mode = runtime?.verification?.mode
+      ?? (runtime?.verification?.agent_tdd ? "agent_tdd" : runtime?.verification?.enabled ? "checks" : "off");
+    const procedures = runtime?.verification?.procedures ?? [];
+    const current = JSON.stringify({ mode, checks, procedures });
+    setVerificationChecks(checks);
+    setVerificationMode(mode);
+    setVerificationProcedures(procedures);
     if (verificationPending !== null && verificationPending === current) {
       setVerificationPending(null);
-      setVerificationFeedback(enabled ? "自动验证已更新，下一次文件变更后生效" : "自动验证已关闭");
+      setVerificationFeedback(mode === "off" ? "自动验证已关闭" : "验证设置已保存到当前会话");
     }
-  }, [runtime?.verification?.enabled, runtime?.verification?.agent_tdd, runtime?.verification?.commands]);
+  }, [
+    runtime?.verification?.mode,
+    runtime?.verification?.enabled,
+    runtime?.verification?.agent_tdd,
+    runtime?.verification?.checks,
+    runtime?.verification?.procedures,
+    runtime?.verification?.commands,
+  ]);
 
   useEffect(() => {
     if (verificationPending === null) return;
@@ -232,7 +260,7 @@ export function ContextDrawer(props: ContextDrawerProps) {
   useEffect(() => {
     if (!pendingStepAction) return;
     const confirmed = pendingStepAction.kind === "set"
-      ? runtime?.steps?.current === pendingStepAction.value
+      ? runtime?.steps?.current === pendingStepAction.value && runtime?.steps?.overridden === true
       : runtime?.steps?.overridden === false;
     if (!confirmed) return;
     setPendingStepAction(null);
@@ -271,8 +299,64 @@ export function ContextDrawer(props: ContextDrawerProps) {
 
   const modelValue = `${modelCatalog?.active?.provider ?? ""}\0${modelCatalog?.active?.id ?? modelName}`;
   const availableModels = modelOptions(modelCatalog?.providers ?? []);
-  const stepMinimum = runtime?.steps?.minimum ?? 12;
-  const stepMaximum = runtime?.steps?.maximum ?? 100;
+  const stepMinimum = runtime?.steps?.minimum ?? 30;
+  const stepMaximum = runtime?.steps?.maximum ?? 999;
+  const verificationProcedureEditor = (
+    <>
+      <div className="verification-procedure-heading">
+        <span>
+          <h3>检验规程</h3>
+          <small>用自然语言告诉 Agent 何时新增、重跑或收紧验证规则。</small>
+        </span>
+        <button
+          type="button"
+          className="secondary-small"
+          disabled={busy || verificationProcedures.length >= 12}
+          onClick={() => setVerificationProcedures((current) => [...current, {
+            id: `procedure-${Date.now().toString(36)}-${current.length + 1}`,
+            instruction: "",
+            enabled: true,
+          }])}
+        >添加规程</button>
+      </div>
+      <div className="verification-procedure-list">
+        {verificationProcedures.map((procedure, index) => (
+          <label className="verification-procedure" key={procedure.id}>
+            <input
+              type="checkbox"
+              aria-label={`启用检验规程 ${index + 1}`}
+              checked={procedure.enabled}
+              disabled={busy}
+              onChange={(event) => setVerificationProcedures((current) => current.map(
+                (item, itemIndex) => itemIndex === index
+                  ? { ...item, enabled: event.target.checked }
+                  : item,
+              ))}
+            />
+            <textarea
+              aria-label={`检验规程 ${index + 1}`}
+              value={procedure.instruction}
+              disabled={busy}
+              placeholder="例如：依赖文件变化后，必须重跑原有测试和构建规则。"
+              onChange={(event) => setVerificationProcedures((current) => current.map(
+                (item, itemIndex) => itemIndex === index
+                  ? { ...item, instruction: event.target.value }
+                  : item,
+              ))}
+            />
+            <button
+              type="button"
+              aria-label={`删除检验规程 ${index + 1}`}
+              disabled={busy}
+              onClick={() => setVerificationProcedures((current) => current.filter(
+                (_, itemIndex) => itemIndex !== index,
+              ))}
+            >删除</button>
+          </label>
+        ))}
+      </div>
+    </>
+  );
 
   return (
     <aside className="context-drawer" aria-label="任务检查器">
@@ -394,66 +478,128 @@ export function ContextDrawer(props: ContextDrawerProps) {
                     <section className="settings-card verification-settings" aria-labelledby="verification-setting-title">
                       <div className="settings-card-heading">
                         <div>
-                          <strong id="verification-setting-title">自动验证</strong>
-                          <small>由验证层在文件变更后触发，不依赖 Agent 自觉执行</small>
+                          <strong id="verification-setting-title">验证方式</strong>
+                          <small>仅用于当前会话；验证命令统一由本地验证层执行</small>
                         </div>
-                        <label className="verification-switch">
-                          <input
-                            type="checkbox"
-                            role="switch"
-                            aria-label="自动验证"
-                            checked={verificationEnabled}
+                      </div>
+                      <div className="verification-mode-picker" role="radiogroup" aria-label="验证方式">
+                        {([
+                          ["off", "关闭", "不自动执行，文件变更后仍可手动验证"],
+                          ["checks", "规则验证", "文件变更后执行匹配的已配置规则"],
+                          ["agent_tdd", "Agent TDD", "Agent 编写独立测试并登记规则，验证层统一执行"],
+                        ] as const).map(([mode, label, description]) => (
+                          <button
+                            key={mode}
+                            type="button"
+                            role="radio"
+                            aria-checked={verificationMode === mode}
+                            className={verificationMode === mode ? "is-selected" : ""}
                             disabled={busy}
-                            onChange={(event) => {
-                              setVerificationEnabled(event.target.checked);
+                            onClick={() => {
+                              setVerificationMode(mode);
+                              setVerificationRulePickerOpen(false);
                               setVerificationFeedback("");
                             }}
-                          />
-                          <span>{verificationEnabled ? "开启" : "关闭"}</span>
-                        </label>
+                          >
+                            <strong>{label}</strong>
+                            <small>{description}</small>
+                          </button>
+                        ))}
                       </div>
-                      <label className="verification-tdd-option">
-                        <input
-                          type="checkbox"
-                          aria-label="Agent TDD"
-                          checked={verificationAgentTdd}
-                          disabled={busy || !verificationEnabled}
-                          onChange={(event) => setVerificationAgentTdd(event.target.checked)}
-                        />
-                        <span><strong>Agent TDD</strong><small>Agent 先编写用例并通过工具执行；自动触发仍由验证层完成。</small></span>
-                      </label>
-                      <label className="verification-command-label" htmlFor="verification-commands">
-                        验证命令
-                        <small>每行一条，按顺序运行。关闭自动验证后仍可手动验证。</small>
-                      </label>
-                      {!runtime?.verification?.commands?.length ? (
-                        <div className="verification-empty-note" role="note">
-                          先选择下方检测到的命令，或填写项目实际使用的测试、构建命令。
+                      {verificationMode === "off" ? (
+                        <div className="verification-mode-note" role="note">
+                          <strong>自动验证已关闭</strong>
+                          <span>关闭后不会在回合结束时自动执行命令。</span>
                         </div>
                       ) : null}
+                      {verificationMode === "agent_tdd" ? (
+                        <div className="verification-tdd-flow">
+                          <div className="verification-mode-note is-tdd" role="note">
+                            <strong>先定义规程，再登记规则</strong>
+                            <span>先告诉 Agent 何时需要新增、重跑或收紧测试，再由它登记可执行规则。</span>
+                          </div>
+                          {verificationProcedureEditor}
+                        </div>
+                      ) : null}
+                      {verificationMode !== "off" ? (
+                        <>
+                      <div className="verification-rule-heading">
+                        <span>
+                          <h3>{verificationMode === "agent_tdd" ? "Agent 验证规则" : "验证规则"}</h3>
+                          <small>每条规则拥有独立的工作目录、命令和超时。</small>
+                        </span>
+                        <button
+                          type="button"
+                          className="secondary-small"
+                          disabled={busy || verificationChecks.length >= 8}
+                          onClick={() => {
+                            setVerificationRulePickerOpen((current) => !current);
+                            setVerificationFeedback("");
+                          }}
+                        >{verificationRulePickerOpen ? "收起" : "添加规则"}</button>
+                      </div>
+                      {!verificationChecks.length ? (
+                        <div className="verification-empty-note" role="note">
+                          先选择下方检测到的命令，或添加项目实际使用的测试、构建规则。
+                        </div>
+                      ) : null}
+                      {verificationRulePickerOpen ? (
+                        <div className="verification-rule-picker">
+                          <button
+                            type="button"
+                            className="verification-blank-rule"
+                            disabled={busy || verificationChecks.length >= 8}
+                            onClick={() => {
+                              const number = verificationChecks.length + 1;
+                              setVerificationChecks((current) => [...current, {
+                                id: `check-${Date.now().toString(36)}-${number}`,
+                                label: `验证 ${number}`,
+                                kind: "custom",
+                                command: "",
+                                cwd: ".",
+                                timeout_seconds: 120,
+                                enabled: true,
+                              }]);
+                              setVerificationRulePickerOpen(false);
+                              setVerificationFeedback("已添加空白规则，请填写命令和工作目录");
+                            }}
+                          >添加空白规则</button>
                       {verificationSuggestions.length ? (
                         <div className="verification-suggestions" role="group" aria-label="检测到的验证命令">
                           <span>项目建议</span>
                           <div>
-                            {verificationSuggestions.map((command) => {
-                              const selected = verificationCommands.includes(command);
+                            {verificationSuggestions.map((suggestion) => {
+                              const selected = verificationChecks.some((check) => (
+                                check.command === suggestion.command && check.cwd === suggestion.cwd
+                              ));
                               return (
                                 <button
-                                  key={command}
+                                  key={suggestion.id}
                                   type="button"
                                   className={selected ? "is-selected" : ""}
-                                  aria-label={`${selected ? "已添加" : "添加建议命令"} ${command}`}
+                                  aria-label={`${selected ? "已添加" : "添加建议命令"} ${suggestion.command}`}
                                   disabled={busy || selected}
                                   onClick={() => {
-                                    setVerificationDraft((current) => {
-                                      const prefix = current.trim() ? `${current.trimEnd()}\n` : "";
-                                      return `${prefix}${command}`;
-                                    });
-                                    setVerificationFeedback(`已添加：${command}`);
+                                    const number = verificationChecks.length + 1;
+                                    setVerificationChecks((current) => [...current, {
+                                      id: `suggested-${Date.now().toString(36)}-${number}`,
+                                      label: suggestion.label,
+                                      kind: suggestion.kind,
+                                      command: suggestion.command,
+                                      cwd: suggestion.cwd,
+                                      timeout_seconds: suggestion.timeout_seconds,
+                                      enabled: true,
+                                      target_paths: suggestion.target_paths,
+                                    }]);
+                                    setVerificationRulePickerOpen(false);
+                                    setVerificationFeedback(`已添加：${suggestion.label}`);
                                   }}
                                 >
                                   <span>{selected ? "✓" : "+"}</span>
-                                  <code>{command}</code>
+                                  <span className="verification-suggestion-copy">
+                                    <b>{suggestion.label}</b>
+                                    <code>{suggestion.cwd} · {suggestion.command}</code>
+                                  </span>
                                 </button>
                               );
                             })}
@@ -465,45 +611,242 @@ export function ContextDrawer(props: ContextDrawerProps) {
                           <span>可查看 README 或项目脚本；常见写法包括 pytest、npm test、cargo test。</span>
                         </div>
                       )}
-                      <textarea
-                        id="verification-commands"
-                        className="verification-command-input mono-label"
-                        aria-label="项目验证命令"
-                        rows={Math.max(3, Math.min(6, verificationDraft.split("\n").length + 1))}
-                        value={verificationDraft}
-                        disabled={busy}
-                        placeholder={"例如：\npython -m pytest -q\npython -m ruff check ."}
-                        onChange={(event) => {
-                          setVerificationDraft(event.target.value);
-                          setVerificationFeedback("");
-                        }}
-                      />
+                      {workspaceVerificationTemplates.length ? (
+                        <div className="verification-suggestions is-workspace-template" role="group" aria-label="工作区验证模板">
+                          <span>工作区模板 <small>导入后仅保存到当前会话</small></span>
+                          <div>
+                            {workspaceVerificationTemplates.map((template) => {
+                              const selected = verificationChecks.some((check) => (
+                                check.command === template.command && check.cwd === template.cwd
+                              ));
+                              return (
+                                <button
+                                  key={`workspace-${template.id}`}
+                                  type="button"
+                                  className={selected ? "is-selected" : ""}
+                                  disabled={busy || selected}
+                                  onClick={() => {
+                                    setVerificationChecks((current) => [
+                                      ...current,
+                                      { ...template, id: `imported-${Date.now().toString(36)}-${current.length + 1}` },
+                                    ]);
+                                    setVerificationRulePickerOpen(false);
+                                    setVerificationFeedback(`已导入到当前会话：${template.label}`);
+                                  }}
+                                >
+                                  <span>{selected ? "✓" : "+"}</span>
+                                  <span className="verification-suggestion-copy">
+                                    <b>{template.label}</b>
+                                    <code>{template.cwd} · {template.command}</code>
+                                  </span>
+                                </button>
+                              );
+                            })}
+                          </div>
+                        </div>
+                      ) : null}
+                        </div>
+                      ) : null}
+                      <div className="verification-rule-list">
+                        {verificationChecks.map((check, index) => (
+                          <section className="verification-rule" key={check.id}>
+                            <div className="verification-rule-card-heading">
+                              <span className="verification-rule-identity">
+                                <b>规则 {index + 1}</b>
+                                {check.source === "agent" ? <em>Agent 登记</em> : null}
+                              </span>
+                              <button
+                                type="button"
+                                className="verification-rule-remove"
+                                aria-label={`删除验证规则 ${index + 1}`}
+                                disabled={busy}
+                                onClick={() => setVerificationChecks((current) => current.filter(
+                                  (_, itemIndex) => itemIndex !== index,
+                                ))}
+                              >删除</button>
+                            </div>
+                            {check.target_paths?.length ? (
+                              <small className="verification-rule-coverage">
+                                覆盖 {check.target_paths.join("、")}
+                              </small>
+                            ) : null}
+                            <div className="verification-rule-topline">
+                              <label>
+                                <span>名称</span>
+                                <input
+                                  aria-label={`验证名称 ${index + 1}`}
+                                  value={check.label}
+                                  disabled={busy}
+                                  onChange={(event) => setVerificationChecks((current) => current.map(
+                                    (item, itemIndex) => itemIndex === index
+                                      ? { ...item, label: event.target.value }
+                                      : item,
+                                  ))}
+                                />
+                              </label>
+                              <label>
+                                <span>类型</span>
+                                <select
+                                  aria-label={`验证类型 ${index + 1}`}
+                                  value={check.kind}
+                                  disabled={busy}
+                                  onChange={(event) => setVerificationChecks((current) => current.map(
+                                    (item, itemIndex) => itemIndex === index
+                                      ? { ...item, kind: event.target.value as VerificationCheckState["kind"] }
+                                      : item,
+                                  ))}
+                                >
+                                  <option value="test">测试</option>
+                                  <option value="build">构建</option>
+                                  <option value="lint">静态检查</option>
+                                  <option value="typecheck">类型检查</option>
+                                  <option value="custom">自定义</option>
+                                </select>
+                              </label>
+                            </div>
+                            <label>
+                              <span>命令</span>
+                              <input
+                                className="mono-label"
+                                aria-label={`验证命令 ${index + 1}`}
+                                value={check.command}
+                                disabled={busy}
+                                placeholder="python -m pytest tests -q"
+                                onChange={(event) => setVerificationChecks((current) => current.map(
+                                  (item, itemIndex) => itemIndex === index
+                                    ? { ...item, command: event.target.value }
+                                    : item,
+                                ))}
+                              />
+                            </label>
+                            <div className="verification-rule-fields">
+                              <label>
+                                <span>工作目录</span>
+                                <input
+                                  className="mono-label"
+                                  aria-label={`工作目录 ${index + 1}`}
+                                  value={check.cwd}
+                                  disabled={busy}
+                                  placeholder=". 或 algorithm_practice"
+                                  onChange={(event) => setVerificationChecks((current) => current.map(
+                                    (item, itemIndex) => itemIndex === index
+                                      ? { ...item, cwd: event.target.value }
+                                      : item,
+                                  ))}
+                                />
+                              </label>
+                              <label>
+                                <span>超时（秒）</span>
+                                <input
+                                  type="number"
+                                  min={1}
+                                  max={3600}
+                                  aria-label={`超时秒数 ${index + 1}`}
+                                  value={check.timeout_seconds}
+                                  disabled={busy}
+                                  onChange={(event) => setVerificationChecks((current) => current.map(
+                                    (item, itemIndex) => itemIndex === index
+                                      ? { ...item, timeout_seconds: Number(event.target.value) }
+                                      : item,
+                                  ))}
+                                />
+                              </label>
+                            </div>
+                            <label>
+                              <span>触发路径</span>
+                              <input
+                                className="mono-label"
+                                aria-label={`触发路径 ${index + 1}`}
+                                value={(check.target_paths ?? []).join(", ")}
+                                disabled={busy}
+                                placeholder="例如 src, tests；留空表示任意文件变更"
+                                onChange={(event) => setVerificationChecks((current) => current.map(
+                                  (item, itemIndex) => itemIndex === index
+                                    ? {
+                                        ...item,
+                                        target_paths: event.target.value
+                                          .split(",")
+                                          .map((value) => value.trim())
+                                          .filter(Boolean),
+                                      }
+                                    : item,
+                                ))}
+                              />
+                              <small>仅本轮改动命中这些工作区相对路径时执行。</small>
+                            </label>
+                          </section>
+                        ))}
+                      </div>
+                        </>
+                      ) : null}
                       <div className="settings-card-footer">
-                        <small>验证命令仍受权限审批、危险命令硬阻断与 Step 预算约束。</small>
+                        <small>
+                          保存即授权当前会话运行完全相同的命令与目录；变更后重新审批，硬安全规则始终生效。
+                        </small>
                         <button
                           type="button"
                           className="primary-small"
                           disabled={busy || verificationPending !== null}
                           onClick={() => {
-                            const commands = verificationCommands;
-                            if (verificationEnabled && !commands.length) {
-                              setVerificationAgentTdd(false);
-                              setVerificationFeedback("请先添加至少一条验证命令，再开启自动验证");
+                            const normalizedChecks = verificationChecks.map((check) => ({
+                              ...check,
+                              label: check.label.trim(),
+                              command: check.command.trim(),
+                              cwd: check.cwd.trim() || ".",
+                              target_paths: [...new Set((check.target_paths ?? []).map((path) => path.trim()).filter(Boolean))],
+                            }));
+                            const checks = verificationMode === "off"
+                              ? normalizedChecks.filter((check) => check.label && check.command)
+                              : normalizedChecks;
+                            const invalidCwd = checks.some((check) => (
+                              /^(?:[A-Za-z]:|[\\/])/.test(check.cwd)
+                              || check.cwd.split(/[\\/]+/).includes("..")
+                            ));
+                            const invalidTarget = checks.some((check) => check.target_paths.some((path) => (
+                              /^(?:[A-Za-z]:|[\\/])/.test(path)
+                              || path.split(/[\\/]+/).includes("..")
+                            )));
+                            if (checks.some((check) => !check.label || !check.command)) {
+                              setVerificationFeedback("请补全每条验证规则的名称和命令");
+                              return;
+                            }
+                            if (invalidCwd) {
+                              setVerificationFeedback("工作目录必须是工作区内的相对路径");
+                              return;
+                            }
+                            if (invalidTarget) {
+                              setVerificationFeedback("触发路径必须是工作区内的相对路径");
+                              return;
+                            }
+                            if (verificationMode === "checks" && !checks.some((check) => check.enabled)) {
+                              setVerificationFeedback("规则验证至少需要一条已启用的验证规则");
+                              return;
+                            }
+                            const normalizedProcedures = verificationProcedures.map((procedure) => ({
+                              ...procedure,
+                              instruction: procedure.instruction.trim(),
+                            }));
+                            const procedures = verificationMode === "agent_tdd"
+                              ? normalizedProcedures
+                              : normalizedProcedures.filter((procedure) => procedure.instruction);
+                            if (verificationMode === "agent_tdd"
+                              && procedures.some((procedure) => !procedure.instruction)) {
+                              setVerificationFeedback("请补全检验规程内容，或删除空白规程");
                               return;
                             }
                             const accepted = props.onVerificationChange({
-                              enabled: verificationEnabled,
-                              agentTdd: verificationAgentTdd,
-                              commands,
+                              mode: verificationMode,
+                              checks,
+                              procedures,
                             });
                             if (accepted === false) {
                               setVerificationFeedback("运行时未连接，保存失败");
                               return;
                             }
                             setVerificationPending(JSON.stringify({
-                              enabled: verificationEnabled,
-                              agentTdd: verificationAgentTdd,
-                              commands: commands.join("\n"),
+                              mode: verificationMode,
+                              checks,
+                              procedures,
                             }));
                             setVerificationFeedback("正在保存…");
                           }}

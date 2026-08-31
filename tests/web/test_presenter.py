@@ -122,7 +122,7 @@ def test_presenter_groups_symbol_navigation_as_read_only_workspace_activity() ->
     assert definition.data["summary"] == "查找 main 的定义"
 
 
-def test_presenter_separates_command_validation_from_routine_activity() -> None:
+def test_presenter_keeps_agent_initiated_test_commands_as_ordinary_commands() -> None:
     presenter = AgentEventPresenter()
     call = presenter.present(
         _event(
@@ -141,8 +141,8 @@ def test_presenter_separates_command_validation_from_routine_activity() -> None:
         )
     )[0]
 
-    assert call.data["kind"] == "validation"
-    assert result.data["kind"] == "validation"
+    assert call.data["kind"] == "command"
+    assert result.data["kind"] == "command"
     assert result.data["summary"] == "24 passed"
 
 
@@ -256,6 +256,29 @@ def test_presenter_labels_the_runtime_edit_file_tool_as_a_file_change() -> None:
     assert call.data["kind"] == "file_change"
     assert call.data["title"] == "修改文件"
     assert call.data["summary"] == "src/app.py"
+
+
+def test_presenter_labels_verification_registration_as_a_formal_rule() -> None:
+    presenter = AgentEventPresenter()
+
+    call = presenter.present(
+        _event(
+            EventKind.TOOL_CALL,
+            {
+                "id": "register-1",
+                "name": "register_verification",
+                "arguments": {
+                    "label": "Algorithm tests",
+                    "command": "python -m pytest tests -q",
+                    "cwd": "algorithm_practice",
+                },
+            },
+        )
+    )[0]
+
+    assert call.data["kind"] == "verification_setup"
+    assert call.data["title"] == "登记验证规则"
+    assert call.data["summary"] == "Algorithm tests · algorithm_practice"
 
 
 def test_presenter_publishes_a_successful_file_change_immediately() -> None:
@@ -379,6 +402,22 @@ def test_presenter_maps_stream_plan_approval_usage_error_and_completion() -> Non
     }
 
 
+def test_presenter_turns_tool_bearing_text_into_a_progress_note() -> None:
+    presented = AgentEventPresenter().present(
+        _event(
+            EventKind.TEXT,
+            {"delta": "I will inspect the relevant files first.", "phase": "progress"},
+        )
+    )
+
+    assert len(presented) == 1
+    assert presented[0].type is ViewEventType.ACTIVITY_UPSERT
+    assert presented[0].data["kind"] == "agent_note"
+    assert presented[0].data["title"] == "Agent 说明"
+    assert presented[0].data["summary"] == "I will inspect the relevant files first."
+    assert presented[0].data["detail"] == {"markdown": "I will inspect the relevant files first."}
+
+
 def test_presenter_keeps_live_lifecycle_progress_for_the_desktop_timeline() -> None:
     presenter = AgentEventPresenter()
 
@@ -425,6 +464,55 @@ def test_history_uses_final_messages_and_ignores_text_deltas() -> None:
         ("assistant", "final answer"),
     ]
     assert all(item.type is ViewEventType.MESSAGE_FINAL for item in history)
+
+
+def test_history_restores_durable_verification_results_with_exact_status() -> None:
+    records = [
+        {
+            "type": "verification_result",
+            "data": {
+                "turn_id": TURN_ID,
+                "status": "timed_out",
+                "command_count": 1,
+                "check_id": "focused-tests",
+                "command": "python -m pytest tests/test_one.py -q",
+                "cwd": ".",
+                "target_paths": ["src/one.py"],
+                "summary": "verification timed out",
+                "execution_ms": 120000,
+                "manual": True,
+            },
+        }
+    ]
+
+    history = AgentEventPresenter().present_history(SESSION_ID, records)
+
+    assert len(history) == 1
+    assert history[0].type is ViewEventType.VERIFICATION_FINISHED
+    assert history[0].turn_id == TURN_ID
+    assert history[0].data["status"] == "timed_out"
+    assert history[0].data["target_paths"] == ["src/one.py"]
+
+
+def test_live_automatic_verification_result_is_presented_semantically() -> None:
+    event = _event(
+        EventKind.VERIFICATION,
+        {
+            "turn_id": TURN_ID,
+            "status": "not_configured",
+            "command_count": 0,
+            "summary": "No verification rule covers the changed files.",
+            "target_paths": ["examples/demo.py"],
+            "manual": False,
+        },
+    )
+
+    presented = AgentEventPresenter().present(event)
+
+    assert len(presented) == 1
+    assert presented[0].type is ViewEventType.VERIFICATION_FINISHED
+    assert presented[0].data["status"] == "not_configured"
+    assert presented[0].data["manual"] is False
 
 
 def test_history_does_not_present_tool_bearing_assistant_content_as_a_final_answer() -> None:

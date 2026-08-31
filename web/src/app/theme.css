@@ -2245,6 +2245,13 @@ body {
   box-shadow: 0 0 0 2px rgb(54 125 214 / 10%);
 }
 
+.model-editor-form input:disabled {
+  color: #485563;
+  cursor: not-allowed;
+  background: #eef2f5;
+  opacity: 1;
+}
+
 .model-secret-note,
 .model-manager-status {
   margin: 0;
@@ -2900,6 +2907,7 @@ body {
 
 .text-action,
 .primary-small,
+.secondary-small,
 .primary-wide,
 .secondary-wide,
 .danger-action {
@@ -2919,6 +2927,7 @@ body {
 .text-action:hover:not(:disabled) { background: var(--blue-soft); }
 .text-action:disabled,
 .primary-small:disabled,
+.secondary-small:disabled,
 .primary-wide:disabled,
 .secondary-wide:disabled,
 .danger-action:disabled { cursor: not-allowed; opacity: 0.45; }
@@ -5263,6 +5272,72 @@ textarea:focus-visible {
 }
 
 .verification-settings { gap: 16px; }
+.verification-mode-note {
+  display: grid;
+  gap: 3px;
+  padding: 10px 12px;
+  color: #58636e;
+  background: #f4f6f8;
+  border: 1px solid #dde3e8;
+  border-radius: 12px;
+}
+
+.verification-mode-note strong {
+  color: #34404a;
+  font-size: 11.5px;
+  font-weight: 650;
+}
+
+.verification-mode-note span {
+  font-size: 10.75px;
+  line-height: 1.5;
+}
+
+.verification-mode-note.is-tdd {
+  background: #f3f7f0;
+  border-color: #dce7d5;
+}
+
+.verification-tdd-flow {
+  display: grid;
+  gap: 14px;
+}
+.verification-mode-picker {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 7px;
+  padding: 5px;
+  background: #edf1f4;
+  border: 1px solid #dce3e9;
+  border-radius: 14px;
+}
+
+.verification-mode-picker button {
+  display: flex;
+  min-width: 0;
+  min-height: 68px;
+  flex-direction: column;
+  gap: 4px;
+  align-items: flex-start;
+  padding: 10px;
+  color: var(--muted);
+  text-align: left;
+  cursor: pointer;
+  background: transparent;
+  border: 1px solid transparent;
+  border-radius: 10px;
+  transition: background 140ms ease, border-color 140ms ease, transform 140ms ease;
+}
+
+.verification-mode-picker button:hover:not(:disabled) { transform: translateY(-1px); }
+.verification-mode-picker button.is-selected {
+  color: var(--text);
+  background: var(--surface);
+  border-color: #d4dde5;
+  box-shadow: 0 1px 4px rgb(38 49 61 / 8%);
+}
+.verification-mode-picker strong { font-size: 11.5px; font-weight: 650; }
+.verification-mode-picker small { font-size: 10px; line-height: 1.45; }
 .verification-switch {
   display: inline-flex;
   gap: 8px;
@@ -5406,6 +5481,15 @@ textarea:focus-visible {
     transform 140ms ease;
 }
 
+.verification-suggestion-copy {
+  display: flex;
+  min-width: 0;
+  flex-direction: column;
+  gap: 2px;
+  align-items: flex-start;
+}
+.verification-suggestion-copy b { font-size: 10.75px; font-weight: 650; }
+
 .verification-suggestions button:hover:not(:disabled) {
   color: #315f91;
   background: #f2f7fc;
@@ -5426,6 +5510,264 @@ textarea:focus-visible {
   font-size: 11.25px;
   text-overflow: ellipsis;
   white-space: nowrap;
+}
+
+.verification-rule-heading {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.verification-rule-heading > span {
+  display: flex;
+  min-width: 0;
+  flex-direction: column;
+  gap: 3px;
+}
+
+.verification-rule-heading strong,
+.verification-rule-heading h3,
+.verification-rule label > span {
+  color: var(--text);
+  font-size: 12px;
+  font-weight: 600;
+}
+
+.verification-rule-heading h3,
+.verification-procedure-heading h3 {
+  margin: 0;
+}
+
+.verification-rule-picker {
+  display: grid;
+  gap: 9px;
+  padding: 10px;
+  background: #f5f7f9;
+  border: 1px solid #dce2e8;
+  border-radius: 13px;
+}
+
+.verification-blank-rule {
+  width: 100%;
+  min-height: 34px;
+  color: #3f6f9f;
+  font: inherit;
+  font-size: 11px;
+  font-weight: 650;
+  cursor: pointer;
+  background: #fff;
+  border: 1px dashed #c8d5e2;
+  border-radius: 10px;
+}
+
+.verification-blank-rule:hover:not(:disabled) {
+  background: #eef5fb;
+  border-color: #aebfd1;
+}
+
+.verification-rule-heading small {
+  color: var(--muted);
+  font-size: 11px;
+  line-height: 1.5;
+}
+
+.verification-rule-heading .secondary-small {
+  flex: 0 0 auto;
+  min-height: 34px;
+  padding: 0 12px;
+  color: #3f6f9f;
+  font: inherit;
+  font-size: 11px;
+  font-weight: 650;
+  cursor: pointer;
+  background: #f3f7fb;
+  border: 1px solid #d3dee9;
+  border-radius: 10px;
+  transition: background 140ms ease, border-color 140ms ease, transform 140ms ease;
+}
+
+.verification-rule-heading .secondary-small:hover:not(:disabled) {
+  background: #eaf2fa;
+  border-color: #bfcfe0;
+  transform: translateY(-1px);
+}
+
+.verification-rule-list {
+  display: grid;
+  gap: 10px;
+}
+
+.verification-rule {
+  display: grid;
+  gap: 10px;
+  padding: 12px;
+  border: 1px solid var(--border);
+  border-radius: 16px;
+  background: color-mix(in srgb, var(--surface) 88%, var(--canvas));
+}
+
+.verification-rule-card-heading {
+  display: flex;
+  min-height: 24px;
+  align-items: center;
+  justify-content: space-between;
+  padding-bottom: 8px;
+  border-bottom: 1px solid color-mix(in srgb, var(--border) 72%, transparent);
+}
+
+.verification-rule-card-heading > span {
+  color: var(--muted);
+  font-size: 10.5px;
+  font-weight: 650;
+  letter-spacing: 0.04em;
+}
+
+.verification-rule-identity {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  letter-spacing: 0;
+}
+
+.verification-rule-identity b {
+  color: var(--muted);
+  font-size: 10.5px;
+  font-weight: 650;
+}
+
+.verification-rule-identity em {
+  padding: 3px 7px;
+  border-radius: 999px;
+  color: #55784a;
+  background: #edf5e9;
+  font-size: 10px;
+  font-style: normal;
+  font-weight: 650;
+}
+
+.verification-rule-coverage {
+  overflow: hidden;
+  color: var(--muted);
+  font: 10.75px/1.45 "JetBrains Mono", monospace;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.verification-rule-topline,
+.verification-rule-fields {
+  display: grid;
+  grid-template-columns: minmax(0, 1.2fr) minmax(116px, 0.8fr);
+  gap: 8px;
+}
+
+.verification-rule-fields {
+  grid-template-columns: minmax(0, 1fr) minmax(94px, 0.35fr);
+}
+
+.verification-rule label {
+  display: grid;
+  gap: 5px;
+}
+
+.verification-rule input,
+.verification-rule select {
+  width: 100%;
+  min-width: 0;
+  height: 40px;
+  padding: 0 11px;
+  border: 1px solid var(--border-strong);
+  border-radius: 11px;
+  color: var(--text);
+  background: var(--surface);
+  font: inherit;
+}
+
+.verification-rule input:focus-visible,
+.verification-rule select:focus-visible {
+  border-color: #7ca8df;
+  outline: 3px solid rgba(65, 130, 220, 0.16);
+}
+
+.verification-rule-remove {
+  min-width: 44px;
+  min-height: 28px;
+  padding: 0 8px;
+  border: 0;
+  border-radius: 8px;
+  color: var(--danger);
+  background: transparent;
+  font: inherit;
+  font-size: 10.5px;
+  cursor: pointer;
+}
+
+.verification-rule-remove:hover:not(:disabled) { background: #fbefed; }
+
+.verification-procedure-heading {
+  display: flex;
+  gap: 12px;
+  align-items: center;
+  justify-content: space-between;
+  padding-top: 3px;
+}
+.verification-procedure-heading > span { display: grid; gap: 3px; }
+.verification-procedure-heading strong,
+.verification-procedure-heading h3 { color: var(--text); font-size: 12px; font-weight: 600; }
+.verification-procedure-heading small { color: var(--muted); font-size: 11px; line-height: 1.5; }
+.verification-procedure-heading .secondary-small {
+  flex: 0 0 auto;
+  min-height: 34px;
+  padding: 0 12px;
+}
+.verification-suggestions.is-workspace-template { background: #f7f5ef; }
+.verification-suggestions > span small {
+  margin-left: 5px;
+  color: var(--muted);
+  font-size: 10px;
+  font-weight: 450;
+}
+.verification-procedure-list { display: grid; gap: 8px; }
+.verification-procedure {
+  display: grid;
+  grid-template-columns: 18px minmax(0, 1fr) auto;
+  gap: 9px;
+  align-items: start;
+  padding: 10px;
+  background: #f6f8f9;
+  border: 1px solid #dce3e8;
+  border-radius: 12px;
+}
+.verification-procedure > input { margin-top: 7px; accent-color: #628b49; }
+.verification-procedure textarea {
+  min-height: 58px;
+  padding: 9px 10px;
+  color: var(--text);
+  font: inherit;
+  font-size: 11.25px;
+  line-height: 1.55;
+  resize: vertical;
+  background: var(--surface);
+  border: 1px solid var(--border-strong);
+  border-radius: 10px;
+}
+.verification-procedure button {
+  min-height: 30px;
+  padding: 0 8px;
+  color: var(--danger);
+  cursor: pointer;
+  background: transparent;
+  border: 0;
+  border-radius: 8px;
+}
+.verification-procedure button:hover:not(:disabled) { background: #fbefed; }
+
+@media (max-width: 1180px) {
+  .verification-mode-picker { grid-template-columns: 1fr; }
+  .verification-rule-topline,
+  .verification-rule-fields {
+    grid-template-columns: 1fr;
+  }
 }
 
 .verification-guidance span {

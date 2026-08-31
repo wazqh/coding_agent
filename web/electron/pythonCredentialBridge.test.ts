@@ -42,3 +42,22 @@ test("checks presence without retrieving a secret", async () => {
 
   await expect(bridge.has("provider:gemini")).resolves.toBe(true);
 });
+
+test("copies a credential inside the Python bridge without returning the secret", async () => {
+  const runner = vi.fn<CredentialBridgeRunner>(async (_python, args, input) => {
+    expect(args).toEqual([
+      "-m",
+      "coding_agent.credential_bridge",
+      "copy",
+      "provider:source",
+      "provider:target",
+    ]);
+    expect(input).toBe("");
+    return { code: 0, stdout: '{"ok":true,"persisted":true}', stderr: "" };
+  });
+  const bridge = new PythonCredentialBridge("python", {}, runner);
+
+  await expect(bridge.copy("provider:source", "provider:target")).resolves.toEqual({
+    persisted: true,
+  });
+});

@@ -16,6 +16,8 @@ const eventTypes = new Set([
   "change.recorded",
   "context.updated",
   "turn.finished",
+  "verification.started",
+  "verification.finished",
   "error",
   "file.previewed",
   "changes.updated",
@@ -115,6 +117,8 @@ function isEventData(type: string, data: Record<string, unknown>): boolean {
   if (type === "plan.updated") return Array.isArray(data.plan);
   if (type === "change.recorded") return isLiveChange(data);
   if (type === "turn.finished") return typeof data.status === "string";
+  if (type === "verification.started") return true;
+  if (type === "verification.finished") return typeof data.status === "string";
   if (type === "error") return hasStrings(data, ["severity", "message"]);
   if (type === "file.previewed") {
     return (

@@ -28,12 +28,14 @@ from coding_agent.safety.paths import WorkspacePaths
 from coding_agent.session import SessionStore
 from coding_agent.tools.base import AppliedChange, WorkingState
 from coding_agent.tools.filesystem import undo_change as undo_file_change
+from coding_agent.verification import VerificationMode, VerificationProcedure
 from coding_agent.web.approval import ApprovalBroker
 from coding_agent.web.changes import legacy_diff_path, summarize_diff
 from coding_agent.web.completion import CompletionItem, query_completions
 from coding_agent.web.presenter import AgentEventPresenter
 from coding_agent.web.preview import WorkspacePreview
 from coding_agent.web.protocol import ViewEvent, ViewEventType
+from coding_agent.workspace_settings import VerificationCheck
 
 
 class CoordinatorError(RuntimeError):
@@ -209,12 +211,32 @@ class TurnCoordinator:
         *,
         enabled: bool,
         agent_tdd: bool,
-        commands: list[str],
+        commands: list[str] | None = None,
+        checks: list[VerificationCheck] | None = None,
     ) -> RuntimeSnapshot:
+        if checks is not None:
+            return self._require_idle_management().set_verification_checks(
+                enabled=enabled,
+                agent_tdd=agent_tdd,
+                checks=checks,
+            )
         return self._require_idle_management().set_verification(
             enabled=enabled,
             agent_tdd=agent_tdd,
-            commands=commands,
+            commands=commands or [],
+        )
+
+    def set_verification_contract(
+        self,
+        *,
+        mode: VerificationMode | str,
+        checks: list[VerificationCheck],
+        procedures: list[VerificationProcedure],
+    ) -> RuntimeSnapshot:
+        return self._require_idle_management().set_verification_contract(
+            mode=mode,
+            checks=checks,
+            procedures=procedures,
         )
 
     def plan_snapshot(self) -> tuple[object, ...]:
@@ -547,9 +569,10 @@ class TurnCoordinator:
         cancel_event: Event,
     ) -> None:
         status = "failed"
+        verification_result: VerificationRunResult | None = None
         try:
-            result = controller.run_verification(turn_id, cancel_event=cancel_event)
-            status = result.status
+            verification_result = controller.run_verification(turn_id, cancel_event=cancel_event)
+            status = verification_result.status
             with self._lock:
                 management = self._management
             if management is not None:
@@ -557,6 +580,7 @@ class TurnCoordinator:
                     "passed": LifecycleState.COMPLETED,
                     "cancelled": LifecycleState.CANCELLED,
                     "not_configured": LifecycleState.COMPLETED,
+                    "not_needed": LifecycleState.COMPLETED,
                 }.get(status, LifecycleState.FAILED)
                 management.set_lifecycle(lifecycle)
         except Exception as exc:
@@ -575,7 +599,19 @@ class TurnCoordinator:
                 session_id=controller.session_id,
                 turn_id=turn_id,
                 kind=ViewEventType.VERIFICATION_FINISHED,
-                data={"status": status},
+                data={
+                    "status": status,
+                    "manual": True,
+                    **(
+                        {
+                            "command_count": verification_result.command_count,
+                            "summary": verification_result.summary,
+                            "target_paths": list(verification_result.target_paths),
+                        }
+                        if verification_result is not None
+                        else {}
+                    ),
+                },
             )
             with self._lock:
                 self._thread = None

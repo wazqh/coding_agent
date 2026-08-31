@@ -28,6 +28,8 @@ def serialize_change(change: AppliedChange) -> dict[str, Any]:
         "after_sha256": change.after_sha256,
         "reversible": reversible,
         "review_status": change.review_status,
+        "turn_id": change.turn_id,
+        "created_directories": change.created_directories,
     }
 
 

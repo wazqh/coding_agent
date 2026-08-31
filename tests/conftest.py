@@ -34,7 +34,7 @@ def settings(tmp_path: Path) -> Settings:
         data_dir=tmp_path / "data",
         model={"name": "fake-model", "api_key": "test-key", "max_retries": 0},
         agent={
-            "max_steps": 12,
+            "max_steps": 40,
             "max_seconds": 60,
             "context_window": 4096,
             "command_timeout": 10,

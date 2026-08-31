@@ -36,7 +36,11 @@ class ContextManager:
         return estimate_request_tokens(messages, tools) >= int(self.context_window * self.threshold)
 
     def compact(
-        self, messages: list[dict[str, Any]], working: WorkingState
+        self,
+        messages: list[dict[str, Any]],
+        working: WorkingState,
+        *,
+        retain_turns: int = 4,
     ) -> tuple[list[dict[str, Any]], str]:
         system_count = 0
         while system_count < len(messages) and messages[system_count].get("role") == "system":
@@ -49,13 +53,20 @@ class ContextManager:
             for index in range(system_count, len(messages))
             if messages[index].get("role") == "user"
         ]
-        if len(user_indices) < 2:
+        if not user_indices:
             return messages, ""
         # A turn begins at a user message and includes every assistant/tool exchange
         # up to the next user message. Keep four complete turns rather than eight
         # arbitrary messages, which can split a Gemini function-call group.
-        retained_turns = min(4, len(user_indices) - 1)
-        recent_start = user_indices[-retained_turns]
+        if retain_turns < 0:
+            raise ValueError("retain_turns must not be negative")
+        if retain_turns == 0:
+            recent_start = len(messages)
+        else:
+            if len(user_indices) < 2:
+                return messages, ""
+            retained_turns = min(retain_turns, len(user_indices) - 1)
+            recent_start = user_indices[-retained_turns]
         recent = messages[recent_start:]
         older = messages[system_count:recent_start]
         if not older:

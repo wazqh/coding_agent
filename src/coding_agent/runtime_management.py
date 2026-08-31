@@ -1,7 +1,8 @@
 from __future__ import annotations
 
 import json
-from collections.abc import Callable
+import re
+from collections.abc import Callable, Sequence
 from contextlib import suppress
 from enum import StrEnum
 from pathlib import Path
@@ -9,9 +10,15 @@ from typing import TYPE_CHECKING, Literal, cast
 
 from pydantic import BaseModel, ConfigDict, Field
 
+from coding_agent.config import MAX_AGENT_STEPS, MIN_AGENT_STEPS
 from coding_agent.model_profiles import ModelProfileWriter
 from coding_agent.skills import VALID_NAME
-from coding_agent.workspace_settings import WorkspaceSettingsStore
+from coding_agent.verification import (
+    VerificationContract,
+    VerificationMode,
+    VerificationProcedure,
+)
+from coding_agent.workspace_settings import VerificationCheck, WorkspaceSettingsStore
 
 if TYPE_CHECKING:
     from coding_agent.controller import AgentController
@@ -35,11 +42,11 @@ class _FrozenModel(BaseModel):
 
 
 class StepSettings(_FrozenModel):
-    current: int = Field(ge=12, le=100)
-    configured_default: int = Field(ge=12, le=100)
+    current: int = Field(ge=MIN_AGENT_STEPS, le=MAX_AGENT_STEPS)
+    configured_default: int = Field(ge=MIN_AGENT_STEPS, le=MAX_AGENT_STEPS)
     overridden: bool
-    minimum: Literal[12] = 12
-    maximum: Literal[100] = 100
+    minimum: Literal[30] = MIN_AGENT_STEPS
+    maximum: Literal[999] = MAX_AGENT_STEPS
 
 
 class ModelSummary(_FrozenModel):
@@ -83,47 +90,124 @@ class ContextSummary(_FrozenModel):
     breakdown: dict[str, int] = Field(default_factory=dict)
 
 
+class VerificationSuggestion(_FrozenModel):
+    id: str
+    label: str
+    kind: Literal["test", "build", "lint", "typecheck", "custom"]
+    command: str
+    cwd: str
+    target_paths: tuple[str, ...]
+    scope: Literal["focused", "full_project"]
+
+
 class VerificationSummary(_FrozenModel):
+    mode: VerificationMode = VerificationMode.OFF
     enabled: bool = False
     agent_tdd: bool = False
+    checks: tuple[VerificationCheck, ...] = ()
+    procedures: tuple[VerificationProcedure, ...] = ()
     commands: tuple[str, ...] = ()
     suggested_commands: tuple[str, ...] = ()
+    suggestions: tuple[VerificationSuggestion, ...] = ()
+    workspace_templates: tuple[VerificationCheck, ...] = ()
 
 
-def _verification_suggestions(workspace: Path) -> tuple[str, ...]:
+def _verification_suggestions(workspace: Path) -> tuple[VerificationSuggestion, ...]:
     """Return conservative, project-derived verification commands for the GUI."""
 
-    suggestions: list[str] = []
+    suggestions: list[VerificationSuggestion] = []
+    ignored_directories = {
+        ".git",
+        ".mypy_cache",
+        ".pytest_cache",
+        ".ruff_cache",
+        ".tox",
+        ".venv",
+        "__pycache__",
+        "build",
+        "dist",
+        "node_modules",
+        "venv",
+    }
 
-    def add(command: str) -> None:
-        if command not in suggestions and len(suggestions) < 8:
-            suggestions.append(command)
+    def project_roots() -> tuple[Path, ...]:
+        roots = [workspace]
+        pending: list[tuple[Path, int]] = [(workspace, 0)]
+        while pending and len(roots) < 64:
+            parent, depth = pending.pop(0)
+            if depth >= 2:
+                continue
+            try:
+                children = sorted(parent.iterdir(), key=lambda path: path.name.casefold())
+            except OSError:
+                continue
+            for child in children:
+                if len(roots) >= 64:
+                    break
+                if (
+                    not child.is_dir()
+                    or child.is_symlink()
+                    or child.name.startswith(".")
+                    or child.name in ignored_directories
+                ):
+                    continue
+                roots.append(child)
+                pending.append((child, depth + 1))
+        return tuple(roots)
 
-    pyproject = workspace / "pyproject.toml"
-    pyproject_text = ""
-    with suppress(OSError):
-        if pyproject.is_file():
-            pyproject_text = pyproject.read_text(encoding="utf-8")
-    if (
-        (workspace / "pytest.ini").is_file()
-        or (workspace / "tests").is_dir()
-        or "[tool.pytest" in pyproject_text
-    ):
-        add("python -m pytest -q")
-    if (workspace / "ruff.toml").is_file() or "[tool.ruff" in pyproject_text:
-        add("python -m ruff check .")
-    if (workspace / "mypy.ini").is_file() or "[tool.mypy" in pyproject_text:
-        add("python -m mypy")
+    roots = project_roots()
 
-    package_files = [workspace / "package.json"]
-    with suppress(OSError):
-        package_files.extend(
-            sorted(
-                path / "package.json"
-                for path in workspace.iterdir()
-                if path.is_dir() and not path.is_symlink() and not path.name.startswith(".")
+    def add(
+        *,
+        label: str,
+        kind: Literal["test", "build", "lint", "typecheck", "custom"],
+        command: str,
+        cwd: str = ".",
+    ) -> None:
+        if any(item.command == command and item.cwd == cwd for item in suggestions):
+            return
+        if len(suggestions) >= 8:
+            return
+        focused = cwd != "."
+        slug = re.sub(r"[^a-z0-9]+", "-", f"{cwd}-{kind}".casefold()).strip("-")
+        suggestions.append(
+            VerificationSuggestion(
+                id=f"suggested-{slug or kind}",
+                label=label,
+                kind=kind,
+                command=command,
+                cwd=cwd,
+                target_paths=(cwd,) if focused else (".",),
+                scope="focused" if focused else "full_project",
             )
         )
+
+    for root in roots:
+        cwd = root.relative_to(workspace).as_posix() or "."
+        pyproject = root / "pyproject.toml"
+        pyproject_text = ""
+        with suppress(OSError):
+            if pyproject.is_file() and pyproject.stat().st_size <= 2 * 1024 * 1024:
+                pyproject_text = pyproject.read_text(encoding="utf-8")
+        python_label = "Python tests" if cwd == "." else f"{root.name} tests"
+        if (
+            (root / "pytest.ini").is_file()
+            or (root / "tox.ini").is_file()
+            or (root / "tests").is_dir()
+            or "[tool.pytest" in pyproject_text
+        ):
+            add(
+                label=python_label,
+                kind="test",
+                command="python -m pytest -q",
+                cwd=cwd,
+            )
+        if (root / "ruff.toml").is_file() or "[tool.ruff" in pyproject_text:
+            add(label=f"{root.name} Ruff", kind="lint", command="python -m ruff check .", cwd=cwd)
+        if (root / "mypy.ini").is_file() or "[tool.mypy" in pyproject_text:
+            add(label=f"{root.name} Mypy", kind="typecheck", command="python -m mypy", cwd=cwd)
+
+    package_files = [root / "package.json" for root in roots]
     for package_file in package_files[:32]:
         try:
             if package_file.stat().st_size > 2 * 1024 * 1024:
@@ -135,16 +219,21 @@ def _verification_suggestions(workspace: Path) -> tuple[str, ...]:
         if not isinstance(scripts, dict):
             continue
         relative_parent = package_file.parent.relative_to(workspace)
-        prefix = "" if relative_parent == Path(".") else f' --prefix "{relative_parent.as_posix()}"'
+        cwd = relative_parent.as_posix()
         if isinstance(scripts.get("test"), str):
-            add(f"npm{prefix} test")
+            add(label=f"{package_file.parent.name} tests", kind="test", command="npm test", cwd=cwd)
         if isinstance(scripts.get("build"), str):
-            add(f"npm{prefix} run build")
+            add(
+                label=f"{package_file.parent.name} build",
+                kind="build",
+                command="npm run build",
+                cwd=cwd,
+            )
 
     if (workspace / "Cargo.toml").is_file():
-        add("cargo test")
+        add(label="Cargo tests", kind="test", command="cargo test")
     if (workspace / "go.mod").is_file():
-        add("go test ./...")
+        add(label="Go tests", kind="test", command="go test ./...")
     return tuple(suggestions)
 
 
@@ -249,6 +338,9 @@ class RuntimeManagement:
         skill_catalog = [] if skills is None else skills.catalog()
         skill_active = () if skills is None else tuple(sorted(skills.active))
         permission = cast(PermissionMode, controller.approval.mode)
+        contract = getattr(controller, "verification_contract", VerificationContract())
+        workspace_templates = self.workspace_settings.load().verification.checks
+        suggestions = _verification_suggestions(workspace)
         return RuntimeSnapshot(
             workspace=str(workspace),
             workspace_name=workspace.name or str(workspace),
@@ -276,10 +368,15 @@ class RuntimeManagement:
                 breakdown=breakdown,
             ),
             verification=VerificationSummary(
-                enabled=self.workspace_settings.load().verification.enabled,
-                agent_tdd=self.workspace_settings.load().verification.agent_tdd,
-                commands=tuple(self.workspace_settings.load().verification.commands),
-                suggested_commands=_verification_suggestions(workspace),
+                mode=contract.mode,
+                enabled=contract.enabled,
+                agent_tdd=contract.agent_tdd,
+                checks=tuple(contract.checks),
+                procedures=tuple(contract.procedures),
+                commands=tuple(contract.commands),
+                suggested_commands=tuple(item.command for item in suggestions),
+                suggestions=suggestions,
+                workspace_templates=tuple(workspace_templates),
             ),
             resources=ResourceSummary(
                 project_resources_loaded=self.runtime.trusted_project,
@@ -317,17 +414,19 @@ class RuntimeManagement:
         return self.snapshot()
 
     def set_verification_commands(self, commands: list[str]) -> RuntimeSnapshot:
-        self.workspace_settings.set_verification_commands(commands)
-        verification = self.workspace_settings.load().verification
-        normalized = tuple(verification.commands)
-        self.runtime.verification_enabled = verification.enabled
-        self.runtime.verification_agent_tdd = verification.agent_tdd
-        self.runtime.verification_commands = normalized
-        controller = self._controller_provider()
-        controller.verification_commands = normalized
-        controller.verification_enabled = verification.enabled
-        controller.verification_agent_tdd = verification.agent_tdd
-        return self.snapshot()
+        checks = [
+            VerificationCheck(
+                id=f"legacy-{index}",
+                label=f"Verification {index}",
+                command=command,
+            )
+            for index, command in enumerate(commands, start=1)
+        ]
+        return self.set_verification_contract(
+            mode=VerificationMode.CHECKS if checks else VerificationMode.OFF,
+            checks=checks,
+            procedures=[],
+        )
 
     def set_verification(
         self,
@@ -336,32 +435,65 @@ class RuntimeManagement:
         agent_tdd: bool,
         commands: list[str],
     ) -> RuntimeSnapshot:
-        self.workspace_settings.set_verification(
-            enabled=enabled,
-            agent_tdd=agent_tdd,
-            commands=commands,
+        checks = [
+            VerificationCheck(
+                id=f"legacy-{index}",
+                label=f"Verification {index}",
+                command=command,
+            )
+            for index, command in enumerate(commands, start=1)
+        ]
+        mode = (
+            VerificationMode.AGENT_TDD
+            if enabled and agent_tdd
+            else VerificationMode.CHECKS
+            if enabled
+            else VerificationMode.OFF
         )
-        verification = self.workspace_settings.load().verification
-        normalized = tuple(verification.commands)
-        self.runtime.verification_enabled = verification.enabled
-        self.runtime.verification_agent_tdd = verification.agent_tdd
-        self.runtime.verification_commands = normalized
+        return self.set_verification_contract(mode=mode, checks=checks, procedures=[])
+
+    def set_verification_checks(
+        self,
+        *,
+        enabled: bool,
+        agent_tdd: bool,
+        checks: Sequence[VerificationCheck | dict[str, object]],
+    ) -> RuntimeSnapshot:
+        mode = (
+            VerificationMode.AGENT_TDD
+            if enabled and agent_tdd
+            else VerificationMode.CHECKS
+            if enabled
+            else VerificationMode.OFF
+        )
+        return self.set_verification_contract(mode=mode, checks=checks, procedures=[])
+
+    def set_verification_contract(
+        self,
+        *,
+        mode: VerificationMode | str,
+        checks: Sequence[VerificationCheck | dict[str, object]],
+        procedures: Sequence[VerificationProcedure | dict[str, object]],
+    ) -> RuntimeSnapshot:
+        contract = VerificationContract(
+            mode=VerificationMode(mode),
+            checks=[VerificationCheck.model_validate(check) for check in checks],
+            procedures=[VerificationProcedure.model_validate(item) for item in procedures],
+        )
         controller = self._controller_provider()
-        controller.verification_enabled = verification.enabled
-        controller.verification_agent_tdd = verification.agent_tdd
-        controller.verification_commands = normalized
+        controller.set_verification_contract(contract)
+        self.runtime.verification_enabled = contract.enabled
+        self.runtime.verification_agent_tdd = contract.agent_tdd
+        self.runtime.verification_commands = tuple(contract.commands)
+        self.runtime.verification_checks = tuple(contract.checks)
         return self.snapshot()
 
     def reset_verification_commands(self) -> RuntimeSnapshot:
-        self.workspace_settings.reset_verification_commands()
-        self.runtime.verification_commands = ()
-        self.runtime.verification_enabled = False
-        self.runtime.verification_agent_tdd = False
-        controller = self._controller_provider()
-        controller.verification_commands = ()
-        controller.verification_enabled = False
-        controller.verification_agent_tdd = False
-        return self.snapshot()
+        return self.set_verification_contract(
+            mode=VerificationMode.OFF,
+            checks=[],
+            procedures=[],
+        )
 
     def model_catalog(self) -> ModelCatalogSnapshot:
         controller = self._controller_provider()

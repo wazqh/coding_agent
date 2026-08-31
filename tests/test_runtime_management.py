@@ -6,12 +6,14 @@ from types import SimpleNamespace
 
 import pytest
 
+import coding_agent.workspace_settings as workspace_settings
 from coding_agent.events import ModelStreamEvent
 from coding_agent.model_catalog import ModelCatalog, ModelSelectionStore
 from coding_agent.runtime_management import LifecycleState, RuntimeManagement
 from coding_agent.safety.approval import ApprovalPolicy, ApprovalRequest
 from coding_agent.session import SessionStore
 from coding_agent.skills import SkillRegistry
+from coding_agent.verification import VerificationContract, VerificationMode, VerificationProcedure
 from coding_agent.workspace_settings import WorkspaceSettingsStore
 
 
@@ -20,8 +22,8 @@ def _management(tmp_path: Path) -> tuple[RuntimeManagement, SimpleNamespace]:
     settings = SimpleNamespace(
         cwd=tmp_path,
         agent=SimpleNamespace(
-            max_steps=24,
-            configured_max_steps=24,
+            max_steps=40,
+            configured_max_steps=40,
             context_window=32_768,
         ),
         model=SimpleNamespace(
@@ -44,6 +46,10 @@ def _management(tmp_path: Path) -> tuple[RuntimeManagement, SimpleNamespace]:
         model_manager=None,
         sessions=SessionStore(data_dir),
         verification_commands=(),
+        verification_checks=(),
+        verification_enabled=False,
+        verification_agent_tdd=False,
+        verification_contract=VerificationContract(),
         context_breakdown=lambda: {
             "system_and_project": 1024,
             "conversation_and_results": 4096,
@@ -56,6 +62,21 @@ def _management(tmp_path: Path) -> tuple[RuntimeManagement, SimpleNamespace]:
         "session",
         {"workspace": str(tmp_path), "model": "gemini-flash"},
     )
+
+    def set_verification_contract(contract: VerificationContract) -> VerificationContract:
+        controller.verification_contract = contract
+        controller.verification_checks = tuple(contract.checks)
+        controller.verification_commands = tuple(contract.commands)
+        controller.verification_enabled = contract.enabled
+        controller.verification_agent_tdd = contract.agent_tdd
+        controller.sessions.append(
+            controller.session_id,
+            "verification_config",
+            contract.model_dump(mode="json"),
+        )
+        return contract
+
+    controller.set_verification_contract = set_verification_contract
     runtime = SimpleNamespace(
         settings=settings,
         provider="gemini",
@@ -85,9 +106,9 @@ def test_runtime_snapshot_reports_tui_status_without_secrets(tmp_path: Path) -> 
     assert snapshot.model.provider == "gemini"
     assert snapshot.model.id == "gemini-flash"
     assert snapshot.permissions == "prompt"
-    assert snapshot.steps.minimum == 12
-    assert snapshot.steps.maximum == 100
-    assert snapshot.steps.current == 24
+    assert snapshot.steps.minimum == 30
+    assert snapshot.steps.maximum == 999
+    assert snapshot.steps.current == 40
     assert snapshot.steps.overridden is False
     assert snapshot.verification.commands == ()
     assert snapshot.context.percent_used == 25
@@ -123,12 +144,12 @@ def test_steps_are_project_scoped_and_reset_to_configured_default(tmp_path: Path
 
     reset = management.reset_steps()
 
-    assert reset.steps.current == 24
+    assert reset.steps.current == 40
     assert reset.steps.overridden is False
     assert management.workspace_settings.load().max_steps is None
 
 
-def test_verification_commands_are_project_scoped_and_update_the_active_controller(
+def test_verification_commands_are_session_scoped_and_update_the_active_controller(
     tmp_path: Path,
 ) -> None:
     management, controller = _management(tmp_path)
@@ -142,9 +163,9 @@ def test_verification_commands_are_project_scoped_and_update_the_active_controll
         "python -m ruff check .",
     )
     assert controller.verification_commands == changed.verification.commands
-    assert management.workspace_settings.load().verification.commands == list(
-        changed.verification.commands
-    )
+    assert management.workspace_settings.load().verification.commands == []
+    records = controller.sessions.replay(controller.session_id)
+    assert records[-1]["type"] == "verification_config"
 
     reset = management.reset_verification_commands()
 
@@ -168,7 +189,58 @@ def test_verification_mode_updates_runtime_and_controller(tmp_path: Path) -> Non
     assert controller.verification_agent_tdd is True
 
 
-def test_runtime_suggests_verification_commands_from_project_markers(tmp_path: Path) -> None:
+def test_empty_agent_tdd_and_manual_procedures_are_valid_session_configuration(
+    tmp_path: Path,
+) -> None:
+    management, controller = _management(tmp_path)
+
+    changed = management.set_verification_contract(
+        mode=VerificationMode.AGENT_TDD,
+        checks=[],
+        procedures=[
+            VerificationProcedure(
+                id="dependency-regression",
+                instruction="After dependencies change, rerun the existing rules.",
+            )
+        ],
+    )
+
+    assert changed.verification.mode is VerificationMode.AGENT_TDD
+    assert changed.verification.checks == ()
+    assert changed.verification.procedures[0].id == "dependency-regression"
+    assert controller.verification_contract.mode is VerificationMode.AGENT_TDD
+    assert management.workspace_settings.load().verification.enabled is False
+
+
+def test_structured_verification_checks_are_exposed_to_runtime_and_controller(
+    tmp_path: Path,
+) -> None:
+    management, controller = _management(tmp_path)
+
+    changed = management.set_verification_checks(
+        enabled=True,
+        agent_tdd=True,
+        checks=[
+            workspace_settings.VerificationCheck(
+                id="web-tests",
+                label="Web tests",
+                kind="test",
+                command="npm test",
+                cwd="web",
+                timeout_seconds=180,
+            )
+        ],
+    )
+
+    assert changed.verification.checks[0].cwd == "web"
+    assert changed.verification.checks[0].command == "npm test"
+    assert controller.verification_checks[0].cwd == "web"
+    assert controller.verification_commands == ("npm test",)
+
+
+def test_runtime_suggests_structured_verification_rules_from_project_markers(
+    tmp_path: Path,
+) -> None:
     (tmp_path / "pyproject.toml").write_text(
         "[tool.pytest.ini_options]\n[tool.ruff]\n[tool.mypy]\n",
         encoding="utf-8",
@@ -183,12 +255,31 @@ def test_runtime_suggests_verification_commands_from_project_markers(tmp_path: P
 
     snapshot = management.snapshot()
 
-    assert snapshot.verification.suggested_commands == (
-        "python -m pytest -q",
-        "python -m ruff check .",
-        "python -m mypy",
-        'npm --prefix "web" test',
-        'npm --prefix "web" run build',
+    suggestions = snapshot.verification.suggestions
+    assert [(item.command, item.cwd, item.scope) for item in suggestions] == [
+        ("python -m pytest -q", ".", "full_project"),
+        ("python -m ruff check .", ".", "full_project"),
+        ("python -m mypy", ".", "full_project"),
+        ("npm test", "web", "focused"),
+        ("npm run build", "web", "focused"),
+    ]
+    assert suggestions[3].target_paths == ("web",)
+
+
+def test_runtime_suggests_focused_python_rules_for_nested_projects(tmp_path: Path) -> None:
+    exercise = tmp_path / "algorithm_practice"
+    (exercise / "tests").mkdir(parents=True)
+    (exercise / "tests" / "test_trap.py").write_text("def test_trap():\n    assert True\n")
+    management, _controller = _management(tmp_path)
+
+    suggestions = management.snapshot().verification.suggestions
+
+    assert any(
+        item.command == "python -m pytest -q"
+        and item.cwd == "algorithm_practice"
+        and item.target_paths == ("algorithm_practice",)
+        and item.scope == "focused"
+        for item in suggestions
     )
 
 

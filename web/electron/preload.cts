@@ -1,6 +1,11 @@
 import { contextBridge, ipcRenderer } from "electron";
 
-import type { DesktopRuntimeInfo, ForgeDesktopBridge, ProviderCredentialInput } from "./types.js";
+import type {
+  DesktopRuntimeInfo,
+  ForgeDesktopBridge,
+  ProviderCredentialCopyInput,
+  ProviderCredentialInput,
+} from "./types.js";
 
 const bridge: ForgeDesktopBridge = Object.freeze({
   runtimeInfo: () => ipcRenderer.invoke("desktop:runtime-info") as Promise<DesktopRuntimeInfo>,
@@ -8,6 +13,10 @@ const bridge: ForgeDesktopBridge = Object.freeze({
   saveProviderCredential: (input: ProviderCredentialInput) =>
     ipcRenderer.invoke("desktop:save-provider-credential", input) as ReturnType<
       ForgeDesktopBridge["saveProviderCredential"]
+    >,
+  copyProviderCredential: (input: ProviderCredentialCopyInput) =>
+    ipcRenderer.invoke("desktop:copy-provider-credential", input) as ReturnType<
+      ForgeDesktopBridge["copyProviderCredential"]
     >,
   commitProviderCredential: (transactionId: string) =>
     ipcRenderer.invoke("desktop:commit-provider-credential", transactionId) as Promise<boolean>,

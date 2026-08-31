@@ -295,15 +295,19 @@ def test_dispatches_runtime_status_and_management_mutations() -> None:
             self.steps.append(value)
             return Snapshot()
 
-        def set_verification(
+        def set_verification_contract(
             self,
             *,
-            enabled: bool,
-            agent_tdd: bool,
-            commands: list[str],
+            mode: object,
+            checks: list[object],
+            procedures: list[object],
         ) -> Snapshot:
             self.verification.append(
-                {"enabled": enabled, "agent_tdd": agent_tdd, "commands": commands}
+                {
+                    "mode": str(mode),
+                    "checks": [check.model_dump(mode="json") for check in checks],
+                    "procedures": procedures,
+                }
             )
             return Snapshot()
 
@@ -344,9 +348,21 @@ def test_dispatches_runtime_status_and_management_mutations() -> None:
     assert management.steps == [40]
     assert management.verification == [
         {
-            "enabled": True,
-            "agent_tdd": True,
-            "commands": ["python -m pytest -q"],
+            "mode": "agent_tdd",
+            "checks": [
+                {
+                    "id": "legacy-1",
+                    "label": "Verification 1",
+                    "kind": "custom",
+                    "command": "python -m pytest -q",
+                    "cwd": ".",
+                    "timeout_seconds": 120,
+                    "enabled": True,
+                    "source": "user",
+                    "target_paths": [],
+                }
+            ],
+            "procedures": [],
         }
     ]
     assert [event.type for event in events] == [
@@ -359,6 +375,78 @@ def test_dispatches_runtime_status_and_management_mutations() -> None:
         ViewEventType.COMMAND_COMPLETED,
     ]
     assert events[-1].data == {"command": "verification.set", "status": "completed"}
+
+
+def test_dispatches_structured_verification_checks_without_flattening_them() -> None:
+    class Snapshot:
+        def model_dump(self, *, mode: str) -> dict[str, object]:
+            assert mode == "json"
+            return {"verification": {"enabled": True}}
+
+    class Management:
+        def __init__(self) -> None:
+            self.checks: list[dict[str, object]] = []
+
+        def set_verification_contract(
+            self,
+            *,
+            mode: object,
+            checks: list[object],
+            procedures: list[object],
+        ) -> Snapshot:
+            self.checks.append(
+                {
+                    "mode": str(mode),
+                    "checks": [check.model_dump(mode="json") for check in checks],
+                    "procedures": procedures,
+                }
+            )
+            return Snapshot()
+
+    coordinator = TurnCoordinator()
+    coordinator.attach_runtime(FakeRuntime(coordinator.handle_agent_event))
+    management = Management()
+    coordinator.attach_management(management)  # type: ignore[arg-type]
+
+    _dispatch_request(
+        coordinator,
+        VerificationSetRequest(
+            type="verification.set",
+            request_id="structured-verification",
+            enabled=True,
+            agent_tdd=True,
+            checks=[
+                {
+                    "id": "algorithm-tests",
+                    "label": "Algorithm tests",
+                    "kind": "test",
+                    "command": "python -m pytest tests -q",
+                    "cwd": "algorithm_practice",
+                    "timeout_seconds": 90,
+                }
+            ],
+        ),
+    )
+
+    assert management.checks == [
+        {
+            "mode": "agent_tdd",
+            "checks": [
+                {
+                    "id": "algorithm-tests",
+                    "label": "Algorithm tests",
+                    "kind": "test",
+                    "command": "python -m pytest tests -q",
+                    "cwd": "algorithm_practice",
+                    "timeout_seconds": 90,
+                    "enabled": True,
+                    "source": "user",
+                    "target_paths": [],
+                }
+            ],
+            "procedures": [],
+        }
+    ]
 
 
 def test_dispatches_reviewable_skill_draft_and_create() -> None:

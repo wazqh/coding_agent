@@ -29,6 +29,11 @@ export function ApprovalCard({ item, onApproval, available = true }: ApprovalCar
     if (item.decision === "cancelled") return "已取消";
     return "审批已结束";
   })();
+  const actionLabel = item.action === "run_command"
+    ? "运行命令"
+    : item.action === "register_verification"
+      ? "注册验证规则"
+      : item.action;
   return (
     <section
       className={`approval-card${item.resolved ? " is-resolved" : ""}${item.decision === "deny" ? " is-denied" : ""}`}
@@ -37,7 +42,7 @@ export function ApprovalCard({ item, onApproval, available = true }: ApprovalCar
         <span className="approval-dot" />
         <div>
           <span>{resolvedLabel}</span>
-          <strong>{item.action === "run_command" ? "运行命令" : item.action}</strong>
+          <strong>{actionLabel}</strong>
         </div>
       </div>
       <code>{item.subject}</code>

@@ -5,12 +5,14 @@ from pydantic import BaseModel, Field
 from coding_agent.events import ToolResult
 from coding_agent.safety.approval import ApprovalRequest
 from coding_agent.safety.commands import CommandPolicy, run_subprocess
+from coding_agent.safety.paths import PathSafetyError
 from coding_agent.tools.base import Tool, ToolContext
 
 
 class RunCommandArgs(BaseModel):
     command: str = Field(min_length=1, max_length=20_000)
-    timeout: int | None = Field(default=None, ge=1, le=300)
+    cwd: str = Field(default=".", min_length=1, max_length=4096)
+    timeout: int | None = Field(default=None, ge=1, le=3600)
 
 
 class RunCommandTool(Tool):
@@ -34,6 +36,7 @@ class RunCommandTool(Tool):
                 summary=classification.reason,
                 data={
                     "command": values.command,
+                    "cwd": values.cwd,
                     "hard_blocked": True,
                     "rule_id": classification.rule_id,
                     "risk_label": classification.risk_label,
@@ -41,18 +44,31 @@ class RunCommandTool(Tool):
                     "guidance": classification.guidance,
                 },
             )
-        if classification.approval_required and not context.approve(
-            ApprovalRequest(
-                action="run_command",
-                subject=values.command,
-                summary=f"run command: {values.command}",
+        command_cwd = context.workspace.resolve(values.cwd)
+        if not command_cwd.is_dir():
+            raise PathSafetyError(f"command cwd is not a directory: {values.cwd}")
+        relative_cwd = context.workspace.display(command_cwd)
+        if (
+            classification.approval_required
+            and not context.is_verification_command_authorized(values.command, relative_cwd)
+            and not context.approve(
+                ApprovalRequest(
+                    action="run_command",
+                    subject=values.command,
+                    summary=f"run command in {relative_cwd}: {values.command}",
+                )
             )
         ):
-            return ToolResult(ok=False, code="APPROVAL_DENIED", summary="command was denied")
+            return ToolResult(
+                ok=False,
+                code="APPROVAL_DENIED",
+                summary="command was denied",
+                data={"command": values.command, "cwd": relative_cwd},
+            )
         timeout = values.timeout or context.command_timeout
         result = run_subprocess(
             values.command,
-            cwd=context.workspace.root,
+            cwd=command_cwd,
             timeout=timeout,
             cancel_requested=context.cancel_requested,
         )
@@ -72,6 +88,7 @@ class RunCommandTool(Tool):
             summary=summary,
             data={
                 "command": values.command,
+                "cwd": relative_cwd,
                 "exit_code": result["exit_code"],
                 "stdout": result["stdout"],
                 "stderr": result["stderr"],

@@ -138,7 +138,7 @@ export function App({
     ? {
         status: progress?.status ?? "executing",
         step: progress?.step ?? 0,
-        maxSteps: runtime?.steps?.current ?? 24,
+        maxSteps: runtime?.steps?.current ?? 40,
         contextLeft: Math.max(0, Math.min(100, Math.round(100 - (context?.percentUsed ?? 0)))),
       }
     : null;
@@ -323,8 +323,8 @@ export function App({
       if (!argument) return transport?.request("steps.get") ?? false;
       if (argument === "reset") return transport?.request("steps.reset") ?? false;
       const valueNumber = Number(argument);
-      if (!Number.isInteger(valueNumber) || valueNumber < 12 || valueNumber > 100) {
-        setCommandFeedback("Steps 必须是 12–100 的整数，或使用 /steps reset。");
+      if (!Number.isInteger(valueNumber) || valueNumber < 30 || valueNumber > 999) {
+        setCommandFeedback("Steps 必须是 30–999 的整数，或使用 /steps reset。");
         return true;
       }
       return transport?.request("steps.set", { value: valueNumber }) ?? false;
@@ -553,6 +553,11 @@ export function App({
                 setDrawerOpen(true);
                 transport?.request("verification.run", { turn_id: turnId });
               }}
+              onConfigureVerification={() => {
+                setDrawerRunPanel("verification");
+                setDrawerView("run");
+                setDrawerOpen(true);
+              }}
               onRepair={(turnId) => {
                 executeInput(buildVerificationRepairTask(timelineItems, turnId));
               }}
@@ -651,8 +656,15 @@ export function App({
           onModelReload={() => transport?.request("model.reload")}
           onModelProviderConfigure={async (input) => {
             if (!window.forgeDesktop) throw new Error("添加服务商仅在桌面应用中可用");
-            const saved = input.preserveCredential
+            const reusesExistingProvider = input.preserveCredential
+              && input.sourceProvider === input.provider;
+            const saved = reusesExistingProvider
               ? null
+              : input.preserveCredential
+              ? await window.forgeDesktop.copyProviderCredential({
+                  sourceProvider: input.sourceProvider ?? "",
+                  targetProvider: input.provider,
+                })
               : await window.forgeDesktop.saveProviderCredential({
                   provider: input.provider,
                   apiKey: input.apiKey,
@@ -667,10 +679,10 @@ export function App({
               if (saved) await window.forgeDesktop.rollbackProviderCredential(saved.transactionId);
               throw new Error("本地运行时未连接，模型元数据尚未保存");
             }
-            pendingProviderRestart.current = saved
-              ? { transactionId: saved.transactionId }
-              : {};
-            return saved ?? { persisted: true, backend: "existing" };
+              pendingProviderRestart.current = saved
+                ? { transactionId: saved.transactionId }
+                : {};
+              return saved ?? { persisted: true, backend: "existing-provider" };
           }}
           onModelProviderDelete={(provider) => {
             const accepted = transport?.request("model.provider.delete", { provider, confirm: true });
@@ -699,11 +711,11 @@ export function App({
           onPermissionChange={(mode) => transport?.request("permissions.set", { mode })}
           onStepsChange={(value) => transport?.request("steps.set", { value }) ?? false}
           onStepsReset={() => transport?.request("steps.reset") ?? false}
-          onVerificationChange={({ enabled, agentTdd, commands }) =>
+          onVerificationChange={({ mode, checks, procedures }) =>
             transport?.request("verification.set", {
-              enabled,
-              agent_tdd: agentTdd,
-              commands,
+              mode,
+              checks,
+              procedures,
             }) ?? false
           }
           onMemoryList={() => transport?.request("memory.list")}

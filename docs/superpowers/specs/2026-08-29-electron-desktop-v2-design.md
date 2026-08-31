@@ -114,7 +114,7 @@ Slash commands remain available in the composer as keyboard shortcuts to the sam
 | `/model` and `/model use PROVIDER [MODEL_ID]` | Model picker with provider/model grouping and current selection |
 | `/model MODEL_ID` | Change model ID within the active provider for the next turn |
 | `/model reload` | Reload model catalog and report configuration diagnostics without revealing keys |
-| `/steps`, `/steps 12-100`, `/steps reset` | Project-bound maximum-step control; minimum 12; changes apply next turn |
+| `/steps`, `/steps 30-999`, `/steps reset` | Project-bound maximum-step control; minimum 30; changes apply next turn |
 | `/permissions prompt\|auto\|read-only` | Permission selector; changing it revokes session grants |
 | `/plan` | Plan panel with pending/in-progress/completed steps and empty state |
 | `/diff` | Cumulative changed-file summary and read-only unified diff inspector |

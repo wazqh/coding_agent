@@ -38,7 +38,7 @@ COMMAND_SPECS = (
     ),
     SlashCommandSpec(
         "/steps",
-        ("/steps", "/steps 12-100", "/steps reset"),
+        ("/steps", "/steps 30-999", "/steps reset"),
         "查看或设置当前工作区的工具步骤预算。",
         "工作区覆盖保存在 Forge 本机数据中，不修改仓库；新值从下一轮任务开始生效。",
     ),

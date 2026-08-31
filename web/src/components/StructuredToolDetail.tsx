@@ -24,6 +24,16 @@ const labels: Record<string, string> = {
   change_kind: "变更类型",
   language: "语言",
   size: "大小",
+  verification_check: "验证规则",
+  created_files: "本轮新建文件",
+  created_directories: "本轮新建目录",
+  target_paths: "覆盖路径",
+  cwd: "工作目录",
+  timeout_seconds: "超时（秒）",
+  source: "来源",
+  label: "名称",
+  kind: "类型",
+  enabled: "已启用",
 };
 
 const hiddenKeys = new Set([

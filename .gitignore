@@ -27,7 +27,9 @@ coding-agent.toml.local
 .env
 .worktrees/
 node_modules/
+.desktop-logs/
 web/dist-electron/
 *.tsbuildinfo
 Test/
 untracked/
+leetcode_algorithms/

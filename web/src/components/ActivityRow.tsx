@@ -4,6 +4,7 @@ import type { ApprovalDecision } from "../protocol/types";
 import type { TimelineItem } from "../state/store";
 import { ApprovalCard } from "./ApprovalCard";
 import { ChevronIcon, ShieldIcon } from "./icons";
+import { MarkdownMessage } from "./MarkdownMessage";
 import { StructuredToolDetail } from "./StructuredToolDetail";
 
 type Activity = Extract<TimelineItem, { kind: "activity" }>;
@@ -44,6 +45,12 @@ function isHardBlocked(detail: unknown): boolean {
   return value.code === "DANGEROUS_COMMAND" || data.hard_blocked === true;
 }
 
+function agentNoteMarkdown(detail: unknown): string | null {
+  if (typeof detail !== "object" || detail === null || !("markdown" in detail)) return null;
+  const markdown = (detail as { markdown?: unknown }).markdown;
+  return typeof markdown === "string" ? markdown : null;
+}
+
 interface ActivityRowProps {
   item: Activity;
   showRaw?: boolean;
@@ -60,8 +67,9 @@ export function ActivityRow({
   const steps = activitySteps(item.detail);
   const structured = steps.length > 0;
   const hardBlocked = isHardBlocked(item.detail);
+  const noteMarkdown = item.activityKind === "agent_note" ? agentNoteMarkdown(item.detail) : null;
   const [expanded, setExpanded] = useState(structured);
-  const detailVisible = showRaw || (!structured && expanded);
+  const detailVisible = showRaw || (!structured && expanded && noteMarkdown === null);
   const statusIcon =
     hardBlocked
       ? <ShieldIcon className="hard-block-shield" />
@@ -127,6 +135,11 @@ export function ActivityRow({
             </li>
           ))}
         </ol>
+      ) : null}
+      {expanded && noteMarkdown !== null ? (
+        <div className="activity-note-detail">
+          <MarkdownMessage content={noteMarkdown} />
+        </div>
       ) : null}
       {detailVisible && item.detail !== undefined ? (
         <StructuredToolDetail detail={item.detail} activityKind={item.activityKind} />

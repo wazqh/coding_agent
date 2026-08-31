@@ -50,8 +50,9 @@ completion, model/provider onboarding, runtime controls, and a resizable task in
 model switching is a flat model-first list; the lower-frequency connection manager separately
 handles provider metadata, credentials, and each provider's expandable model catalog. The
 inspector separates **Settings** (model, permissions, and Step budget) from **Run**. Run itself has
-two focused views: **Command history** for real command output and **Verification** for project
-checks, the automatic-verification switch, Agent TDD guidance, and deterministic evidence. Slash
+two focused views: **Command history** for real command output and **Verification** for the current
+session's verification contract, Agent TDD guidance, user-authored procedures, and deterministic
+evidence. Slash
 commands open the corresponding panel directly. When no checks are configured, Forge derives
 one-click suggestions from project markers such as `pyproject.toml`, `package.json`, `Cargo.toml`,
 and `go.mod`; discovery only reads workspace-confined metadata and never executes a command. Its
@@ -128,8 +129,11 @@ Hunyuan, Gemini, OpenRouter, and regional Alibaba, Huawei, and Tencent MaaS gate
 and appends `/chat/completions` itself. For example, use
 `https://open.bigmodel.cn/api/paas/v4`, not a URL ending in `/chat/completions`. The form previews
 the final request URL and offers a one-click correction for common copied endpoints; the Python
-writer enforces the same rule for TUI and imported configurations. Saved providers can be edited,
-duplicated, or deleted, and a blank API Key while editing preserves the existing system credential.
+writer enforces the same rule for TUI and imported configurations. Saved models can be edited,
+copied, or deleted. Copying a model adds a sibling model under the same provider: the provider name,
+Base URL, compatibility mode, and operating-system credential remain shared and locked, while the
+form clears and focuses only **Model ID**. No credential enters renderer state or WebSocket traffic.
+A blank API Key while editing preserves the existing system credential.
 After switching, the desktop restarts the local runtime and performs a minimal connectivity probe
 that reports authentication, model, rate-limit, or network failures without exposing provider
 responses or secret values.
@@ -181,7 +185,7 @@ Interactive management commands are:
 | `/help [COMMAND]` | List commands with descriptions or show detailed usage for one command. |
 | `/status` | Show the current session, model, permissions, context, plan, memory, and skills. |
 | `/model ...` | Add providers securely, inspect models, switch model/provider, or reload metadata. |
-| `/steps [12-100|reset]` | Inspect or persist the tool-step budget for this workspace. |
+| `/steps [30-999|reset]` | Inspect or persist the tool-step budget for this workspace. |
 | `/permissions [MODE]` | Inspect or change `prompt`, `auto`, or `read-only` approval policy. |
 | `/plan` / `/diff` | Inspect the current plan or edits applied in this process. |
 | `/memory ...` | List, enable, disable, remember, forget, or explicitly clear project memory. |
@@ -222,17 +226,35 @@ by repository identity like project Memory, and never edits the workspace; `/ste
 the trusted project value or the default. Non-interactive execution returns code 3 when an approval
 would be required; configuration failures return 2 and user cancellation returns 130.
 
-The desktop **Task inspector → Run → Verification** view can store up to eight project-scoped
-verification commands, one command per line. Project-derived suggestion chips reduce setup guesswork,
-but a command becomes active only after the user explicitly saves it. Automatic verification is an explicit switch. With it
-off, a completed turn remains visibly **unverified** and can be checked on demand from its timeline
-footer. With it on, a file-changing turn runs the configured checks through the normal command
-safety, approval, cancellation, timeout, and Step-budget boundaries before its final answer is
-released. Optional **Agent TDD** guidance asks the Agent to write focused tests and execute them with
-ordinary tools; the deterministic verification layer—not the model—owns the automatic trigger. A
-failing observation is returned to the model for at most two repair attempts. The final failed
-receipt offers a visible repair action that sends the command and failure evidence back as a new
-user-visible task. Hard safety blocks cannot be overridden by verification settings or GUI controls.
+The desktop **Task inspector → Run → Verification** view stores one isolated verification contract
+per session. Its three exclusive modes are **Off**, **Checks**, and **Agent TDD**. Each enabled rule
+has a stable ID, label, kind, command, workspace-relative working directory, timeout, and optional
+covered paths. Legacy workspace rules remain available only as importable templates; project-derived
+suggestions reduce setup guesswork but are never enabled silently. Suggestions scan bounded root and
+nested project markers, so a task in a self-contained subproject can run from that subproject instead
+of accidentally inheriting the host repository's test configuration.
+
+With verification off, a file-changing turn remains visibly **unverified** and can be checked on
+demand from its timeline footer; a read-only turn is simply complete and offers no irrelevant Verify
+action. **Checks** automatically runs only rules whose declared scope intersects that turn's changes.
+**Agent TDD** asks the Agent to create separate framework-native tests and call
+`register_verification` with an explicit project root, command, timeout, and covered paths; the
+deterministic verification layer—not the model—owns execution. Users may also add session-scoped,
+natural-language verification procedures, such as “after dependency changes, rerun the existing
+test and build rules.” These procedures are visible, editable, and injected into the Agent prompt.
+Saving a rule authorizes only that exact command in that exact workspace-relative directory for the
+current Session, preventing a second approval dialog when the deterministic layer executes it.
+Changed commands or directories still require approval, and no rule can bypass path confinement,
+cancellation, timeout, hard-safety, or Step-budget boundaries.
+
+Automatic and manual results are durable session records tied to the target turn. The GUI preserves
+exact outcomes—passed tests, test failure, configuration error, approval denial, timeout,
+cancellation, or no applicable rule—instead of flattening them into success/failure prose. Only an
+explicit deterministic verification event counts as evidence; an ordinary Agent-run `pytest` or
+`npm test` remains a tool observation. Candidate final prose is held until automatic verification
+reaches a terminal state. Only a real test failure is returned to the model for at most two repair
+attempts, and its receipt exposes a visible repair action. Hard safety blocks cannot be overridden
+by verification settings or GUI controls.
 
 ## Safety model
 
@@ -245,7 +267,11 @@ user-visible task. Hard safety blocks cannot be overridden by verification setti
 - Destructive commands such as `git reset --hard`, forced `git clean`, recursive removal, disk
   formatting, and shutdown are rejected before execution rather than presented for approval. The
   desktop identifies these as non-overridable hard-safety decisions and shows the attempted command
-  plus a safer next step without exposing raw protocol JSON.
+  plus a safer next step without exposing raw protocol JSON. Classification is based on the parsed
+  executable, subcommand, flags, preview mode, target type, shell wrappers, and nested command—not
+  the presence of a word such as `format`. Read-only previews such as `git clean --dry-run`,
+  PowerShell `-WhatIf`, and `ruff format --check` therefore remain usable, while encoded shell
+  payloads and actual device targets remain hard-blocked.
 - Child processes receive a secret-stripped environment, bounded output, a timeout, and process-tree
   termination.
 - Repository `AGENTS.md`, configuration, and skills require hash-invalidated project trust.

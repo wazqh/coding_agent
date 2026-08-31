@@ -58,18 +58,26 @@ export class PythonCredentialBridge {
     return { persisted: result.persisted === true };
   }
 
+  async copy(source: string, target: string): Promise<{ persisted: boolean }> {
+    const result = await this.invoke("copy", source, "", target);
+    return { persisted: result.persisted === true };
+  }
+
   async delete(reference: string): Promise<void> {
     await this.invoke("delete", reference, "");
   }
 
   private async invoke(
-    action: "has" | "set" | "delete",
+    action: "has" | "set" | "copy" | "delete",
     reference: string,
     input: string,
+    target?: string,
   ): Promise<Record<string, unknown>> {
+    const args = ["-m", "coding_agent.credential_bridge", action, reference];
+    if (target) args.push(target);
     const result = await this.runner(
       this.pythonExecutable,
-      ["-m", "coding_agent.credential_bridge", action, reference],
+      args,
       input,
       this.environment,
     );

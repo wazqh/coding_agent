@@ -144,7 +144,7 @@
 - [x] Render consistent `used / window` metrics and human-readable history without Raw JSON.
 - [x] Run token, presenter, and store tests.
 
-### Task 6: Project verification hooks
+### Task 6: Verification hooks (superseded by the Session contract)
 
 **Files:**
 - Modify: `src/coding_agent/workspace_settings.py`
@@ -156,8 +156,9 @@
 - Test: `tests/web/test_coordinator.py`
 
 **Interfaces:**
-- Produces: project-scoped `verification.enabled`, `verification.agent_tdd`, and
-  `verification.commands: list[str]`
+- Historical output: project-scoped verification settings. The later Session Verification Contract
+  replaces active project state with Session-scoped mode, rules, procedures, and durable results;
+  legacy workspace commands remain importable templates rooted at `.`.
 - Produces: manual deterministic checks plus a bounded automatic repair loop with at most two retries
 
 - [x] Add failing configuration tests for validation, project isolation, and malformed commands.

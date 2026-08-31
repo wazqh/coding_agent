@@ -67,7 +67,7 @@ test("reduces ordered turn events and ignores duplicate sequence numbers", () =>
   expect(state.config?.model).toBe("gemini-flash");
   expect(state.items.map((item) => item.kind)).toEqual(["user", "assistant", "completion"]);
   expect(state.items[1]).toMatchObject({ content: "Done.", streaming: false });
-  expect(state.items[2]).toMatchObject({ validationStatus: "not_run" });
+  expect(state.items[2]).toMatchObject({ validationStatus: "not_needed" });
 });
 
 test("tracks validation outcome for the completed turn", () => {
@@ -228,7 +228,73 @@ test("manual verification updates an existing completed turn in place", () => {
   });
 
   expect(store.getState().busy).toBe(false);
-  expect(store.getState().items[0]).toMatchObject({ validationStatus: "passed" });
+  expect(store.getState().items[0]).toMatchObject({
+    validationStatus: "passed",
+    verificationStatus: "passed",
+  });
+});
+
+test("preserves exact verification outcomes instead of flattening every failure", () => {
+  const store = createAgentStore();
+  const apply = store.getState().applyEvent;
+  apply({
+    protocol_version: 2,
+    type: "turn.finished",
+    seq: 1,
+    session_id: sessionId,
+    turn_id: "turn-timeout",
+    data: { status: "completed" },
+  });
+  apply({
+    protocol_version: 2,
+    type: "verification.finished",
+    seq: 2,
+    session_id: sessionId,
+    turn_id: "turn-timeout",
+    data: { status: "timed_out", summary: "command exceeded 30 seconds" },
+  });
+
+  expect(store.getState().items[0]).toMatchObject({
+    validationStatus: "failed",
+    verificationStatus: "timed_out",
+  });
+});
+
+test("retains automatic verification results that arrive before turn completion", () => {
+  const store = createAgentStore();
+  const apply = store.getState().applyEvent;
+  apply({
+    protocol_version: 2,
+    type: "turn.started",
+    seq: 1,
+    session_id: sessionId,
+    turn_id: "turn-auto",
+    data: { task: "change one file" },
+  });
+  apply({
+    protocol_version: 2,
+    type: "verification.finished",
+    seq: 2,
+    session_id: sessionId,
+    turn_id: "turn-auto",
+    data: { status: "not_configured", manual: false },
+  });
+
+  expect(store.getState().busy).toBe(true);
+  apply({
+    protocol_version: 2,
+    type: "turn.finished",
+    seq: 3,
+    session_id: sessionId,
+    turn_id: "turn-auto",
+    data: { status: "completed" },
+  });
+
+  expect(store.getState().items.at(-1)).toMatchObject({
+    kind: "completion",
+    validationStatus: "not_run",
+    verificationStatus: "not_configured",
+  });
 });
 
 test("merges an approval into the operation card with the same stable id", () => {
@@ -402,7 +468,7 @@ test("disconnect cancels unresolved approval and interrupts the active turn", ()
   expect(state.items.at(-1)).toMatchObject({
     kind: "completion",
     status: "interrupted",
-    validationStatus: "not_run",
+    validationStatus: "not_needed",
   });
 });
 
@@ -561,6 +627,46 @@ test("stores change review and safe file preview events", () => {
     language: "python",
     size: 12,
     text: "answer = 42",
+  });
+});
+
+test("read-only turns complete without offering irrelevant verification", () => {
+  const store = createAgentStore();
+  const apply = store.getState().applyEvent;
+  apply({
+    protocol_version: 2,
+    type: "turn.started",
+    seq: 1,
+    session_id: sessionId,
+    turn_id: "turn-read-only",
+    data: { task: "explain the prompt" },
+  });
+  apply({
+    protocol_version: 2,
+    type: "activity.upsert",
+    seq: 2,
+    session_id: sessionId,
+    turn_id: "turn-read-only",
+    data: {
+      activity_id: "workspace-read",
+      kind: "workspace_check",
+      title: "检查工作区",
+      status: "completed",
+      summary: "read controller.py",
+    },
+  });
+  apply({
+    protocol_version: 2,
+    type: "turn.finished",
+    seq: 3,
+    session_id: sessionId,
+    turn_id: "turn-read-only",
+    data: { status: "completed", reason: "assistant completed" },
+  });
+
+  expect(store.getState().items.at(-1)).toMatchObject({
+    kind: "completion",
+    validationStatus: "not_needed",
   });
 });
 

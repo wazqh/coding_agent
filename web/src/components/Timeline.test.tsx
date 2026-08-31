@@ -91,6 +91,28 @@ test("renders complete tool details as labeled fields without raw JSON", async (
   await user.click(screen.getByRole("button", { name: /检查工作区/ }));
 });
 
+test("expands an Agent note as rendered Markdown", async () => {
+  const user = userEvent.setup();
+  const note: TimelineItem[] = [{
+    id: "agent-note",
+    kind: "activity",
+    activityId: "agent-note:1",
+    activityKind: "agent_note",
+    title: "Agent 说明",
+    summary: "先检查实现，再补回归测试。",
+    status: "completed",
+    detail: { markdown: "## 排查结果\n\n- 已定位到 `controller.py`" },
+  }];
+
+  render(<Timeline items={note} onApproval={() => true} />);
+  expect(screen.queryByRole("heading", { name: "排查结果" })).not.toBeInTheDocument();
+
+  await user.click(screen.getByRole("button", { name: /Agent 说明/ }));
+
+  expect(screen.getByRole("heading", { name: "排查结果" })).toBeInTheDocument();
+  expect(screen.getByText("controller.py")).toBeInTheDocument();
+});
+
 test("shows the current plan step and its neighboring steps while work is active", () => {
   const plan: TimelineItem[] = [
     {
@@ -292,6 +314,20 @@ test("keeps approval controls active when transport rejects the request", async 
   expect(screen.getByRole("button", { name: "允许一次" })).toBeEnabled();
 });
 
+test("uses a human-readable label for verification registration approvals", () => {
+  const registration = {
+    ...items[4],
+    action: "register_verification",
+    subject: "algorithm_practice: python -m pytest tests -q",
+    summary: "register verification: Algorithm tests",
+  } as TimelineItem;
+
+  render(<Timeline items={[registration]} onApproval={() => true} />);
+
+  expect(screen.getByText("注册验证规则")).toBeInTheDocument();
+  expect(screen.queryByText("register_verification")).not.toBeInTheDocument();
+});
+
 test("keeps a backend-cancelled approval permanently resolved after reconnect", async () => {
   const user = userEvent.setup();
   const onApproval = vi.fn(() => true);
@@ -337,6 +373,24 @@ test("keeps unverified completion neutral and reserves success language for real
   expect(screen.getByRole("button", { name: "验证此轮" })).toBeInTheDocument();
 });
 
+test("shows a plain completion without verification controls for a read-only turn", () => {
+  const onVerify = vi.fn();
+  const completion: TimelineItem[] = [{
+    id: "done-read-only",
+    kind: "completion",
+    turnId: "turn-read-only",
+    status: "completed",
+    reason: "assistant completed",
+    validationStatus: "not_needed",
+  }];
+
+  render(<Timeline items={completion} onApproval={() => true} onVerify={onVerify} />);
+
+  expect(screen.getByText("已完成")).toBeInTheDocument();
+  expect(screen.queryByRole("button", { name: "验证此轮" })).not.toBeInTheDocument();
+  expect(screen.queryByText("未验证")).not.toBeInTheDocument();
+});
+
 test("offers repair for a failed verification with the failed turn id", async () => {
   const user = userEvent.setup();
   const onRepair = vi.fn();
@@ -355,6 +409,48 @@ test("offers repair for a failed verification with the failed turn id", async ()
   expect(screen.getByText("已完成 · 验证失败")).toBeInTheDocument();
   await user.click(screen.getByRole("button", { name: "修复验证失败" }));
   expect(onRepair).toHaveBeenCalledWith("turn-failed");
+});
+
+test("uses precise recovery actions for verification configuration and timeouts", async () => {
+  const user = userEvent.setup();
+  const onConfigureVerification = vi.fn();
+  const onVerify = vi.fn();
+  const exact: TimelineItem[] = [
+    {
+      id: "config-error",
+      kind: "completion",
+      turnId: "turn-config",
+      status: "completed",
+      reason: "",
+      validationStatus: "failed",
+      verificationStatus: "configuration_error",
+    },
+    {
+      id: "timeout",
+      kind: "completion",
+      turnId: "turn-timeout",
+      status: "completed",
+      reason: "",
+      validationStatus: "failed",
+      verificationStatus: "timed_out",
+    },
+  ];
+
+  render(
+    <Timeline
+      items={exact}
+      onApproval={() => true}
+      onVerify={onVerify}
+      onConfigureVerification={onConfigureVerification}
+    />,
+  );
+
+  expect(screen.getByText("已结束 · 验证配置有误")).toBeInTheDocument();
+  expect(screen.getByText("已结束 · 验证超时")).toBeInTheDocument();
+  await user.click(screen.getByRole("button", { name: "修复验证配置" }));
+  await user.click(screen.getByRole("button", { name: "重新验证此轮" }));
+  expect(onConfigureVerification).toHaveBeenCalledOnce();
+  expect(onVerify).toHaveBeenCalledWith("turn-timeout");
 });
 
 test("marks a user message after a completion as the start of a new turn", () => {

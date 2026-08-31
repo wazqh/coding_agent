@@ -207,14 +207,15 @@ def test_protocol_v2_accepts_management_requests(
         assert isinstance(request, PermissionsSetRequest)
 
 
-def test_steps_set_rejects_values_below_twelve() -> None:
+@pytest.mark.parametrize("value", [29, 1000])
+def test_steps_set_rejects_values_outside_supported_range(value: int) -> None:
     with pytest.raises(ValidationError):
         parse_client_request(
             {
                 "protocol_version": 2,
                 "type": "steps.set",
-                "request_id": "steps-low",
-                "value": 11,
+                "request_id": "steps-invalid",
+                "value": value,
             }
         )
 
@@ -283,3 +284,53 @@ def test_verification_requests_expose_mode_and_manual_run_target() -> None:
     assert configured.enabled is True
     assert configured.agent_tdd is True
     assert manual.turn_id == "turn-123"
+
+
+def test_verification_request_accepts_an_empty_agent_tdd_contract_with_procedures() -> None:
+    configured = parse_client_request(
+        {
+            "protocol_version": 2,
+            "type": "verification.set",
+            "request_id": "verification-contract",
+            "mode": "agent_tdd",
+            "checks": [],
+            "procedures": [
+                {
+                    "id": "dependency-regression",
+                    "instruction": "After dependencies change, rerun the existing rules.",
+                }
+            ],
+        }
+    )
+
+    assert configured.mode == "agent_tdd"
+    assert configured.enabled is True
+    assert configured.agent_tdd is True
+    assert configured.procedures[0].id == "dependency-regression"
+
+
+def test_verification_set_accepts_project_aware_checks() -> None:
+    configured = parse_client_request(
+        {
+            "protocol_version": 2,
+            "type": "verification.set",
+            "request_id": "verification-checks",
+            "enabled": True,
+            "agent_tdd": True,
+            "checks": [
+                {
+                    "id": "algorithm-tests",
+                    "label": "Algorithm tests",
+                    "kind": "test",
+                    "command": "python -m pytest tests -q",
+                    "cwd": "algorithm_practice",
+                    "timeout_seconds": 90,
+                    "enabled": True,
+                }
+            ],
+        }
+    )
+
+    assert configured.type == "verification.set"
+    assert configured.checks[0].cwd == "algorithm_practice"
+    assert configured.checks[0].timeout_seconds == 90

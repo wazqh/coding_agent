@@ -67,6 +67,19 @@ test("rejects malformed sessions, changes, and file previews", () => {
   ).toBeNull();
 });
 
+test("accepts verification lifecycle events", () => {
+  const started = { ...valid, type: "verification.started", data: {} };
+  const finished = {
+    ...valid,
+    type: "verification.finished",
+    data: { status: "not_configured", manual: false },
+  };
+
+  expect(parseViewEvent(started)).toEqual(started);
+  expect(parseViewEvent(finished)).toEqual(finished);
+  expect(parseViewEvent({ ...finished, data: { status: 400 } })).toBeNull();
+});
+
 test("validates live file change records before updating the Diff panel", () => {
   const recorded = {
     ...valid,

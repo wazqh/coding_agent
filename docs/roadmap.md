@@ -9,7 +9,7 @@ browser product.
 
 - Local model-tool-observation loop with structured events, bounded retries, loop guards, visible
   plans, workspace tools, cached symbol outline/definition/reference navigation, configurable
-  12–100 step budgets, and resumable JSONL sessions.
+  30–999 step budgets, and resumable JSONL sessions.
 - Workspace confinement, hash-guarded atomic writes, visible unified diffs, three-way approvals,
   dangerous-command refusal, secret-stripped child environments, and process-tree cancellation.
 - Scrolling prompt-toolkit/Rich interface with normal terminal history, narrow and `NO_COLOR`
@@ -30,13 +30,23 @@ browser product.
 - Stable operation cards merge approval, execution, and result state; hard-safety blocks use a
   non-overridable shield receipt. The restart-safe change ledger supports accept or conflict-safe
   undo for one or all changes, unified/side-by-side/fullscreen review, and resizable inspection.
-- Human-readable tool, run, resource, validation, and context details without raw JSON; project
-  verification separates command history from verification controls, offers project-derived
-  one-click command suggestions, supports manual or automatic checks plus Agent TDD guidance, and
-  feeds failures through at most two bounded repair attempts
-  while retaining the ordinary approval, safety, cancellation, and Step-budget boundaries. Turn
-  footers distinguish unverified, running, passed, and failed states and expose a visible repair
-  action with the failed evidence.
+- Human-readable tool, run, resource, validation, and context details without raw JSON. Verification
+  separates command history from a Session-isolated contract with `off`, `checks`, and `agent_tdd`
+  modes; rules include kind, relative cwd, covered paths, and timeout. Bounded project discovery
+  offers focused nested-project suggestions, while legacy workspace rules are importable templates
+  rather than silently active settings. Users can add editable natural-language verification
+  procedures, which are included in the Agent prompt. The default `register_verification` tool lets
+  the Agent propose an approved Session rule after creating separate test artifacts; deterministic
+  execution remains owned by the verification layer. It feeds only genuine test failures through at
+  most two bounded repair attempts. Saving a rule authorizes only its exact command/cwd pair for
+  that Session so deterministic execution never stalls on a second approval; hard safety, changed
+  commands, cancellation, and Step-budget boundaries remain intact. Turn
+  footers distinguish complete read-only turns from changed-but-unverified, running, passed, and
+  failed states, preserves configuration/denial/timeout/cancellation separately, and exposes a
+  visible repair action only for real test failures.
+- Model copying creates a sibling model under the same provider, reusing its Base URL,
+  compatibility mode, and operating-system credential while clearing only the new Model ID field.
+  Neither renderer state nor protocol traffic receives the secret.
 - Bundled Noto Sans SC and JetBrains Mono, hashed wheel-contained renderer assets, Python/Vitest
   regression coverage, and a mocked renderer acceptance path at 1024×700 and 1920×1080 on Windows
   and Linux.

@@ -446,7 +446,7 @@ class InteractiveShell:
         current = self.controller.settings.agent.max_steps
         if not argument:
             self.console.print(f"max steps: [cyan]{current}[/] [dim](workspace)[/]")
-            self._management_hint("change", "/steps 12-100", "applies next turn")
+            self._management_hint("change", "/steps 30-999", "applies next turn")
             self._management_hint("reset", "/steps reset", "restore configured default")
             return
         if argument == "reset":

@@ -129,22 +129,49 @@ removes only Memory records whose evidence identifies that Session; failure in e
 the operation back. Removing a project from the recent-project index preserves its directory, Git
 data, sessions, and Memory so reopening it is recoverable.
 
-Project-scoped verification stores an explicit enabled flag, optional Agent TDD guidance, and at
-most eight validated command strings. Legacy workspaces that already stored commands migrate as
-enabled; new workspaces remain disabled until the user opts in. Manual verification uses the same
-controller command path but never calls the model. Automatic verification runs only after a turn
-creates a change, through the existing command tool, approval policy, hard-safety screening,
-cancellation, timeout, and Step budget. Candidate final prose is buffered until those checks pass,
-so failed attempts cannot appear ahead of the repair trace. A failure becomes a normal tool
-observation and permits at most two model repair attempts. Validation events are deterministic
-receipts and are never inferred from final assistant text. Agent TDD changes only the system
-guidance: the Agent writes tests and invokes tools explicitly, while the verification layer owns
-automatic execution.
+Each Session owns one append-only verification contract with mode `off`, `checks`, or `agent_tdd`,
+up to eight structured rules, and optional user-authored procedures. A rule contains a stable ID,
+label, kind, command, enabled state, timeout, workspace-relative working directory, and covered
+paths. The contract and its exact results are restored from that Session's JSONL; switching Sessions
+does not carry active rules across. Legacy workspace rules are retained only as explicit importable
+templates. Workspace `max_steps` remains project-scoped.
+
+Working directories are resolved through the same workspace boundary as file tools, so absolute
+paths, traversal, and escaping links are rejected. Bounded marker discovery suggests root and nested
+project checks without executing them. Manual verification uses the same controller command path
+but never calls the model. In Agent TDD mode, the default `register_verification` tool lets the Agent
+propose a focused Session rule after creating separate framework-native tests. The proposal records
+an explicit relative cwd, timeout, covered paths, and files/directories created during the turn; it
+requires approval. Once saved, only that exact command/cwd pair is authorized for deterministic
+execution in the current Session, avoiding a duplicate approval wait. Any command or directory
+change returns to ordinary approval, and hard-safety checks always run first. Equivalent command/cwd
+registrations are updated rather than duplicated.
+
+Automatic verification runs only after a turn creates a change and selects rules whose target scope
+intersects that turn's changed paths, through the existing command tool, exact saved-rule
+authorization, hard-safety screening, cancellation, per-rule timeout, and Step budget. User-authored procedures are
+injected into the Agent's stable verification prompt to guide rule selection, registration, and
+updates; they cannot directly execute commands or override safety. Candidate final prose is buffered
+until deterministic checks reach a terminal state, so text, plan changes, and verification receipts
+remain ordered. Outcomes preserve passed, test-failed, configuration-error, approval-denied,
+timed-out, cancelled, and not-configured states. Only an explicit verification event counts as
+evidence, and only a genuine test failure permits at most two model repair attempts.
+
+The renderer derives turn verification state from deterministic activity rather than final prose.
+A read/search-only turn has no verification obligation and finishes as **complete**. A successful
+file-changing turn with no verification evidence is **unverified** and exposes the manual Verify
+action; running, passed, and failed checks replace that state with their corresponding receipt.
+
+Model copying creates a sibling entry inside the existing provider. Provider name, Base URL,
+compatibility mode, and operating-system credential stay unchanged; the editor clears and focuses
+only the new Model ID. The renderer sends non-secret metadata through the local protocol and never
+reads or duplicates the provider credential.
 
 The runtime derives conservative verification suggestions from small, workspace-confined project
-markers at the repository root and in direct child packages. It never executes discovery commands,
-does not follow directory symlinks, and ignores oversized package metadata. Suggestions remain UI
-hints until the user explicitly saves them.
+markers using bounded scanning through nested project roots. It never executes discovery commands,
+does not follow directory symlinks, ignores generated/transient directories and oversized package
+metadata, and prefers focused subproject checks over an unrelated host-wide command. Suggestions
+remain UI hints until the user explicitly adds and saves them into the current Session.
 
 At 70% of the complete request size (messages plus tool schemas), deterministic compaction runs
 before a new user turn rather than inside an active tool chain. It preserves the goal, constraints,
@@ -161,7 +188,11 @@ for replay.
 Repository configuration, instructions, and skills are hashed. Trust is invalidated when those
 resources change. Paths are resolved after normalization and must remain inside the workspace.
 Mutations are hash-guarded and atomic. Command screening precedes approval; directly destructive
-commands are never executable. Skills can describe scripts, but loading a skill never executes one.
+commands are never executable. Screening parses executable identity, subcommands, flags, preview
+modes, device targets, shell wrappers, and nested command payloads. It does not hard-block a command
+merely because an argument or quoted string contains a risky word. Opaque encoded shell payloads are
+rejected because their effective operation cannot be reviewed. Skills can describe scripts, but
+loading a skill never executes one.
 
 The model API receives messages and function schemas only. Tool execution, argument validation,
 approval, filesystem access, process management, looping, persistence, and termination stay local.

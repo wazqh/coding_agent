@@ -15,7 +15,7 @@ from coding_agent.credentials import (
 def execute(
     action: str,
     reference: str,
-    secret: str,
+    value: str,
     service: CredentialService,
 ) -> dict[str, object]:
     if action == "has":
@@ -25,11 +25,23 @@ def execute(
             "persistent": service.persistent,
         }
     if action == "set":
-        if not secret:
+        if not value:
             raise CredentialStoreError("credential must not be empty")
-        if "\n" in secret or "\r" in secret:
+        if "\n" in value or "\r" in value:
             raise CredentialStoreError("credential must not contain line breaks")
-        service.set(reference, secret)
+        service.set(reference, value)
+        return {"ok": True, "persisted": service.persistent}
+    if action == "copy":
+        if not value:
+            raise CredentialStoreError("destination credential is required")
+        if value == reference:
+            raise CredentialStoreError("source and destination credentials must differ")
+        source = service.get(reference)
+        if source is None:
+            raise CredentialStoreError("source credential was not found")
+        if service.get(value) is not None:
+            raise CredentialStoreError("destination credential already exists")
+        service.set(value, source)
         return {"ok": True, "persisted": service.persistent}
     if action == "delete":
         service.delete(reference)
@@ -39,17 +51,18 @@ def execute(
 
 def main(argv: Sequence[str] | None = None) -> int:
     parser = argparse.ArgumentParser(add_help=False)
-    parser.add_argument("action", choices=("has", "set", "delete"))
+    parser.add_argument("action", choices=("has", "set", "copy", "delete"))
     parser.add_argument("reference")
+    parser.add_argument("target", nargs="?")
     values = parser.parse_args(argv)
-    secret = sys.stdin.read(16_385) if values.action == "set" else ""
+    value = sys.stdin.read(16_385) if values.action == "set" else (values.target or "")
     try:
-        if len(secret) > 16_384:
+        if len(value) > 16_384:
             raise CredentialStoreError("credential is too long")
         result = execute(
             values.action,
             values.reference,
-            secret,
+            value,
             KeyringCredentialService(),
         )
     except CredentialStoreError as exc:

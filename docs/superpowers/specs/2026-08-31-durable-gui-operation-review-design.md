@@ -70,16 +70,23 @@ Context presents one consistent used-token metric and an explicitly approximate 
 
 ## Verification hooks
 
-Trusted project configuration may define verification commands, an explicit automatic-verification
-switch, and optional Agent TDD guidance. Manual checks use the same tool path without invoking the
-model. With automatic verification enabled, a turn that changed files executes configured checks
+This original project-scoped hook design is superseded by the Session Verification Contract design.
+Trusted project configuration may still define structured verification templates, but the active
+mode, rules, procedures, and results belong to the current Session. Each rule carries its kind,
+command, timeout, covered paths, and workspace-relative working directory; legacy command lists are
+exposed as templates rooted at `.`.
+Manual checks use the same tool path without invoking the model. With automatic verification
+enabled for the Session, a turn that changed files executes applicable rules
 through the existing command safety and approval policy before candidate final prose is released.
-Failures are returned to the model for at most two repair attempts, within the existing step budget.
+Test failures are returned to the model for at most two repair attempts, within the existing step
+budget. Configuration, approval, timeout, and cancellation outcomes remain terminal rather than
+being misreported as code failures.
 The GUI shows deterministic check results separately from the model's prose and exposes visible
-unverified, running, passed, and failed states. Agent TDD guides test-first behavior but does not move
-automatic execution authority into the model.
+unverified, running, passed, and failed states. Agent TDD guides the model to create separate native
+test artifacts and declare a Session rule, but does not move automatic execution authority
+into the model.
 
-When the command list is empty, the runtime reads small workspace-confined project markers and the
+When the check list is empty, the runtime reads small workspace-confined project markers and the
 GUI presents matching commands as compact suggestion controls. Detection does not execute commands,
 follow directory symlinks, or silently save a choice; configuration remains an explicit user action.
 

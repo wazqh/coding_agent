@@ -20,6 +20,11 @@ export interface ProviderCredentialInput {
   apiKey: string;
 }
 
+export interface ProviderCredentialCopyInput {
+  sourceProvider: string;
+  targetProvider: string;
+}
+
 export interface CredentialSaveResult {
   persisted: boolean;
   backend: string;
@@ -36,6 +41,7 @@ export interface ForgeDesktopBridge {
   runtimeInfo(): Promise<DesktopRuntimeInfo>;
   selectWorkspace(): Promise<string | null>;
   saveProviderCredential(input: ProviderCredentialInput): Promise<CredentialSaveResult>;
+  copyProviderCredential(input: ProviderCredentialCopyInput): Promise<CredentialSaveResult>;
   commitProviderCredential(transactionId: string): Promise<boolean>;
   rollbackProviderCredential(transactionId: string): Promise<boolean>;
   deleteProviderCredential(provider: string): Promise<void>;

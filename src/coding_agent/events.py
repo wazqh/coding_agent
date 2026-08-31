@@ -34,6 +34,7 @@ class EventKind(StrEnum):
     COMPACT = "compact"
     MEMORY = "memory"
     SKILL = "skill"
+    VERIFICATION = "verification"
     SESSION = "session"
     DONE = "done"
 

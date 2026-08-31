@@ -12,9 +12,12 @@ test("marks nested child groups so directory guide lines can follow tree depth",
     />,
   );
 
-  const groups = screen.getAllByRole("group");
-  expect(groups).toHaveLength(2);
+  const groups = screen
+    .getAllByRole("group")
+    .filter((group) => group.classList.contains("resource-tree-children"));
+  expect(groups).toHaveLength(3);
   expect(groups[0]).toHaveClass("resource-tree-children");
   expect(groups[0]).toHaveStyle({ "--tree-guide-depth": "0" });
   expect(groups[1]).toHaveStyle({ "--tree-guide-depth": "1" });
+  expect(groups[2]).toHaveStyle({ "--tree-guide-depth": "2" });
 });

@@ -92,7 +92,7 @@ def make_shell(
         workspace_settings=WorkspaceSettingsStore(
             data_dir=settings.data_dir, workspace=settings.cwd
         ),
-        configured_max_steps=24,
+        configured_max_steps=40,
     )
     shell.session.output_size.columns = width  # type: ignore[attr-defined]
     assert shell.session.erase_when_done is not True  # type: ignore[attr-defined]
@@ -392,7 +392,7 @@ def test_steps_command_persists_workspace_override_and_resets_default(
     assert shell.workspace_settings.load().max_steps == 40
 
     assert not shell._slash("/steps reset")
-    assert controller.settings.agent.max_steps == 24
+    assert controller.settings.agent.max_steps == 40
     assert shell.workspace_settings.load().max_steps is None
     assert "next turn" in output.getvalue()
 
@@ -405,7 +405,7 @@ def test_steps_command_rejects_invalid_values_without_changing_budget(
 
     assert not shell._slash(f"/steps {value}")
 
-    assert controller.settings.agent.max_steps == 24
+    assert controller.settings.agent.max_steps == 40
     assert "12" in output.getvalue() and "100" in output.getvalue()
 
 
