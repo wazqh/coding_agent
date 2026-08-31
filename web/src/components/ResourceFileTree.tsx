@@ -125,7 +125,11 @@ export function ResourceFileTree({ paths, statuses, selectedPath, onSelect }: Re
             <small>{node.children.length}</small>
           </button>
           {expanded ? (
-            <div role="group">
+            <div
+              role="group"
+              className="resource-tree-children"
+              style={{ "--tree-guide-depth": depth } as CSSProperties}
+            >
               {node.children.map((child) => renderNode(child, depth + 1))}
             </div>
           ) : null}

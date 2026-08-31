@@ -103,12 +103,6 @@ export function Composer({
 
   return (
     <div className="composer-dock">
-      {!ready ? (
-        <div className="runtime-strip" aria-live="polite">
-          <span className="status-pulse" />
-          <strong>正在连接</strong>
-        </div>
-      ) : null}
       <form
         className="composer"
         onSubmit={(event) => {

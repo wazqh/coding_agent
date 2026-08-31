@@ -203,7 +203,7 @@ class AgentController:
     ) -> str:
         sections = [
             (
-                f"You are {PRODUCT_NAME}, a local CLI coding agent. Complete the user's task "
+                f"You are {PRODUCT_NAME}, a local coding agent. Complete the user's task "
                 "using the provided local tools."
             ),
             (

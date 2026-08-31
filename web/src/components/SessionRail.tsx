@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useState } from "react";
 
-import { ChevronIcon, FolderIcon, PlusIcon, SearchIcon } from "./icons";
+import { ChevronIcon, FolderIcon, PlusIcon, SearchIcon, TrashIcon } from "./icons";
 import type { ProjectSummary, SessionSummary } from "../state/store";
 
 interface SessionRailProps {
@@ -135,7 +135,14 @@ export function SessionRail({
             const expanded = Boolean(query) || expandedProjects.has(project.path);
             return (
               <div className={`project-node${project.current ? " is-current" : ""}`} key={project.path || project.name}>
-                <div className="project-row">
+                <div
+                  className="project-row"
+                  onContextMenu={(event) => {
+                    if (project.current || busy) return;
+                    event.preventDefault();
+                    setConfirmProjectPath(project.path);
+                  }}
+                >
                   <button
                     type="button"
                     className="project-toggle"
@@ -171,12 +178,13 @@ export function SessionRail({
                   {!project.current ? (
                     <button
                       type="button"
-                      className="project-more"
+                      className="project-remove-button"
                       disabled={busy}
-                      aria-label={`移除项目 ${project.name}`}
+                      aria-label={`从 Forge 移除项目 ${project.name}`}
+                      title="从 Forge 移除（不会删除文件）"
                       onClick={() => setConfirmProjectPath(project.path)}
                     >
-                      ···
+                      <TrashIcon />
                     </button>
                   ) : null}
                 </div>
@@ -184,10 +192,10 @@ export function SessionRail({
                   <div className="project-remove-confirm" role="alertdialog" aria-label={`移除项目${project.name}`}>
                     <strong>从 Forge 中移除“{project.name}”？</strong>
                     <p className="mono-label">{project.path}</p>
-                    <small>不会删除工作目录、Git 文件、会话或 Memory。</small>
+                    <small>不会删除工作区文件、Git 数据、会话或 Memory。</small>
                     <div>
                       <button type="button" onClick={() => setConfirmProjectPath(null)}>取消</button>
-                      <button type="button" className="is-danger" onClick={() => { setConfirmProjectPath(null); onRemoveProject(project.path); }}>移除</button>
+                      <button type="button" className="is-danger" aria-label={`确认从 Forge 移除 ${project.name}`} onClick={() => { setConfirmProjectPath(null); onRemoveProject(project.path); }}>从 Forge 移除</button>
                     </div>
                   </div>
                 ) : null}

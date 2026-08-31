@@ -1,5 +1,11 @@
 # Durable GUI Operation and Review Design
 
+## Status
+
+Implemented in the current 2026-08-31 delivery candidate. This document records the accepted
+operation/change-review architecture; use `README.md` for launch instructions and `docs/roadmap.md`
+for the remaining release gates.
+
 ## Goal
 
 Make the Electron GUI the authoritative, reviewable presentation of an agent turn: approvals,

@@ -13,6 +13,8 @@ const bridge: ForgeDesktopBridge = Object.freeze({
     ipcRenderer.invoke("desktop:commit-provider-credential", transactionId) as Promise<boolean>,
   rollbackProviderCredential: (transactionId: string) =>
     ipcRenderer.invoke("desktop:rollback-provider-credential", transactionId) as Promise<boolean>,
+  deleteProviderCredential: (provider: string) =>
+    ipcRenderer.invoke("desktop:delete-provider-credential", provider) as Promise<void>,
   restartGateway: (input = {}) =>
     ipcRenderer.invoke("desktop:restart-gateway", input) as Promise<void>,
   openExternal: (url: string) => ipcRenderer.invoke("desktop:open-external", url) as Promise<boolean>,

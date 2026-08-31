@@ -2,7 +2,7 @@
 
 ## Status
 
-Approved in chat on 2026-08-30. This module makes provider credentials configured from Electron
+Implemented and integrated on 2026-08-31. This module makes provider credentials configured from Electron
 available to the TUI and one-shot CLI without storing plaintext secrets in Forge configuration,
 sessions, logs, Memory, Skills, command arguments, or the frontend protocol.
 

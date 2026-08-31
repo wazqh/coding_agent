@@ -191,4 +191,11 @@ class SessionStore:
                     "model": str(configuration.get("model", metadata.get("model", ""))),
                 }
             )
-        return sorted(sessions, key=lambda item: str(item["updated_at"]), reverse=True)
+        # Some Windows clocks report multiple adjacent writes with the same timestamp.
+        # Prefer the session with more persisted records in that tie so a just-appended
+        # configuration or message is not hidden behind an older empty session.
+        return sorted(
+            sessions,
+            key=lambda item: (str(item["updated_at"]), int(item["records"])),
+            reverse=True,
+        )

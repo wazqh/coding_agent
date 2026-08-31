@@ -53,6 +53,11 @@ user/assistant messages while ignoring historical text deltas, so answers are no
 Initialization restores the most recent meaningful session for the active workspace, falling back
 to its latest blank session; it creates a Session only when the workspace has none.
 
+Electron treats gateway replacement as an expected lifecycle during model or workspace switching.
+The renderer enters a labeled transition state before the old socket closes, while the transport
+retries a short bounded startup handshake. Only an exhausted or unexpected disconnect becomes the
+recoverable “cannot connect” state, so a deliberate restart is not presented as a failure.
+
 The Resources inspector derives a contextual file tree from paths already present in durable changes
 and structured activity. It does not enumerate the entire repository or introduce a second filesystem
 boundary. Directories are collapsible, changed files carry created/modified status, and selecting a
@@ -69,6 +74,27 @@ fields and concise summaries rather than exposed as raw JSON. Approval, executio
 events share the model tool-call ID, allowing the renderer to update one operation card throughout
 its lifecycle. Successful routine reads may be grouped as an exploration phase; mutations,
 validation, approvals, failures, and hard-safety blocks remain individually inspectable.
+
+Review and preview surfaces are siblings of the conversation rather than nested code editors. A
+selected resource or change opens an adjacent workspace-confined pane that never covers the project
+rail. Its header and controls remain content-sized and non-scrolling; only the file or Diff body owns
+the remaining height and scroll position. Unified and side-by-side Diff, command details, and file
+previews share JetBrains Mono metrics, stable line-number gutters, readable line spacing, and thin
+scrollbars. Secondary copy remains lower-emphasis without becoming unreadable or carrying state by
+itself.
+
+Interaction hierarchy is semantic as well as visual: active inspector tabs use text weight and an
+indicator, nested resource groups expose tree roles and guide lines, Slash commands render as one
+row per command, and every save, restart, accept, undo, delete, or connection action produces a
+visible state change. Transient success receipts are emitted only by a new state transition; loading
+persisted review state or reopening the inspector does not replay them. Animations have
+reduced-motion fallbacks and never replace text/status output.
+
+Read-only code navigation is part of the local `ToolRegistry`: `list_symbols`, `find_definition`,
+and `find_references` share an in-process, modification-time-invalidated index. Python uses the
+standard-library AST for definitions and references; common compiled and web languages use a
+bounded lexical adapter. The index is ephemeral, never leaves the workspace, and appears in the
+desktop timeline as grouped workspace exploration rather than raw tool data.
 
 ## Turn lifecycle
 
@@ -95,10 +121,10 @@ terminates the complete command process tree before the cancelled turn is persis
   keyed by normalized repository root plus Git remote.
 - `AGENTS.md` is repository-owned policy. Skills are reusable procedures. Neither is memory.
 
-Desktop accept marks a change reviewed without touching the workspace. Discard/Undo applies the
+Desktop accept marks a change reviewed without touching the workspace. Undo applies the
 selected recorded change in reverse only when the current file still
 matches the recorded after-state. Later edits cause a recoverable conflict instead of an unsafe
-overwrite; bulk discard runs in reverse order and reports partial conflicts. Deleting a Session
+overwrite; bulk undo runs in reverse order and reports partial conflicts. Deleting a Session
 removes only Memory records whose evidence identifies that Session; failure in either store rolls
 the operation back. Removing a project from the recent-project index preserves its directory, Git
 data, sessions, and Memory so reopening it is recoverable.

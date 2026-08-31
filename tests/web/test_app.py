@@ -18,6 +18,8 @@ from coding_agent.web.protocol import (
     RuntimeStatusRequest,
     SessionDeleteRequest,
     SessionResumeRequest,
+    SkillsCreateRequest,
+    SkillsDraftRequest,
     StepsSetRequest,
     VerificationSetRequest,
     ViewEventType,
@@ -322,3 +324,65 @@ def test_dispatches_runtime_status_and_management_mutations() -> None:
         ViewEventType.COMMAND_COMPLETED,
     ]
     assert events[-1].data == {"command": "verification.set", "status": "completed"}
+
+
+def test_dispatches_reviewable_skill_draft_and_create() -> None:
+    class Payload:
+        def __init__(self, value: dict[str, object]) -> None:
+            self.value = value
+
+        def model_dump(self, *, mode: str) -> dict[str, object]:
+            assert mode == "json"
+            return self.value
+
+    class Management:
+        def draft_skill(self, **values: object) -> Payload:
+            assert values == {"requirement": "Review boundaries", "template": "review"}
+            return Payload(
+                {
+                    "name": "boundary-review",
+                    "description": "Review workspace boundaries.",
+                    "instructions": "# Workflow\n\nReview the change.",
+                    "generated_by": "model",
+                }
+            )
+
+        def create_skill(self, **values: object) -> Payload:
+            assert values["scope"] == "repo"
+            assert values["name"] == "boundary-review"
+            return Payload({"items": [{"name": "boundary-review"}]})
+
+    coordinator = TurnCoordinator()
+    coordinator.attach_runtime(FakeRuntime(coordinator.handle_agent_event))
+    coordinator.attach_management(Management())  # type: ignore[arg-type]
+
+    _dispatch_request(
+        coordinator,
+        SkillsDraftRequest(
+            type="skills.draft",
+            request_id="draft",
+            requirement="Review boundaries",
+            template="review",
+        ),
+    )
+    _dispatch_request(
+        coordinator,
+        SkillsCreateRequest(
+            type="skills.create",
+            request_id="create",
+            scope="repo",
+            name="boundary-review",
+            description="Review workspace boundaries.",
+            instructions="# Workflow\n\nReview the change.",
+        ),
+    )
+
+    events = coordinator.drain_events()
+    assert [event.type for event in events] == [
+        ViewEventType.SKILL_DRAFTED,
+        ViewEventType.COMMAND_COMPLETED,
+        ViewEventType.SKILLS_UPDATED,
+        ViewEventType.COMMAND_COMPLETED,
+    ]
+    assert events[0].data["draft"]["generated_by"] == "model"
+    assert events[2].data["skills"]["items"][0]["name"] == "boundary-review"

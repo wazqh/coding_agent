@@ -3,6 +3,7 @@ from __future__ import annotations
 from pathlib import Path
 
 from coding_agent.events import AgentEvent
+from coding_agent.model_catalog import ModelSelectionStore
 from coding_agent.runtime import RuntimeFactory
 from coding_agent.safety.approval import ApprovalDecision, ApprovalRequest
 from coding_agent.workspace_settings import WorkspaceSettingsStore
@@ -49,6 +50,25 @@ def test_runtime_factory_preserves_model_and_workspace_configuration(tmp_path: P
     assert controller.model.compatibility == "gemini"
     assert controller.model_manager is not None
     assert controller.model_manager.provider == "gemini"
+
+
+def test_runtime_factory_recovers_from_a_stale_persisted_model(tmp_path: Path) -> None:
+    data_dir = tmp_path / "data"
+    _write_model_catalog(data_dir)
+    state = ModelSelectionStore(data_dir=data_dir)
+    state.save(provider="gemini", model="gemini-retired")
+
+    runtime = RuntimeFactory(
+        workspace=tmp_path,
+        data_dir=data_dir,
+        permissions="read-only",
+        trusted_project=False,
+        interactive=False,
+        environ={"GEMINI_API_KEY": "secret-value"},
+    )
+
+    assert runtime.settings.model.name == "gemini-flash"
+    assert state.load() is not None and state.load().model == "gemini-flash"
 
 
 def test_runtime_factory_keeps_frontend_callbacks_and_session_approval_isolated(

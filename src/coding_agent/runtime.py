@@ -90,8 +90,14 @@ class RuntimeFactory:
                 and active_model is not None
                 and active_model.provider == self.provider
             ):
-                selected_name = active_model.model
+                profile = self.catalog.config.providers[self.provider]
+                if not profile.models or active_model.model in profile.models:
+                    selected_name = active_model.model
             selected = self.catalog.resolve(self.provider, selected_name)
+            if active_model is not None and (
+                active_model.provider != selected.provider or active_model.model != selected.model
+            ):
+                self.model_state.save(provider=selected.provider, model=selected.model)
             self.settings.model.name = selected.model
             self.settings.model.base_url = selected.base_url
             self.settings.model.api_key = selected.api_key

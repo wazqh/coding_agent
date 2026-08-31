@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 from collections.abc import Callable
 from enum import StrEnum
 from typing import TYPE_CHECKING, Literal, cast
@@ -7,6 +8,7 @@ from typing import TYPE_CHECKING, Literal, cast
 from pydantic import BaseModel, ConfigDict, Field
 
 from coding_agent.model_profiles import ModelProfileWriter
+from coding_agent.skills import VALID_NAME
 from coding_agent.workspace_settings import WorkspaceSettingsStore
 
 if TYPE_CHECKING:
@@ -45,8 +47,11 @@ class ModelSummary(_FrozenModel):
 
 class ModelProviderSummary(_FrozenModel):
     name: str
+    base_url: str | None
     default_model: str
     models: tuple[str, ...]
+    compatibility: Literal["openai", "gemini"]
+    managed: bool = True
     active: bool
 
 
@@ -61,6 +66,12 @@ class ProviderConfigurationResult(_FrozenModel):
     api_key_env: str
     requires_restart: Literal[True] = True
     catalog: ModelCatalogSnapshot
+
+
+class ModelProbeResult(_FrozenModel):
+    ok: bool
+    category: Literal["ready", "authentication", "model", "rate_limit", "network", "provider"]
+    message: str
 
 
 class ContextSummary(_FrozenModel):
@@ -121,6 +132,13 @@ class SkillsSnapshot(_FrozenModel):
     items: tuple[dict[str, object], ...]
     active: tuple[str, ...]
     diagnostics: tuple[str, ...]
+
+
+class SkillDraft(_FrozenModel):
+    name: str
+    description: str
+    instructions: str
+    generated_by: Literal["model", "template"]
 
 
 class CompactResult(_FrozenModel):
@@ -255,8 +273,10 @@ class RuntimeManagement:
         providers = tuple(
             ModelProviderSummary(
                 name=name,
+                base_url=profile.base_url,
                 default_model=profile.default_model,
                 models=tuple(profile.models or [profile.default_model]),
+                compatibility=profile.compatibility,
                 active=name == active_provider,
             )
             for name, profile in self.runtime.catalog.config.providers.items()
@@ -265,8 +285,11 @@ class RuntimeManagement:
             providers = (
                 ModelProviderSummary(
                     name=active_provider,
+                    base_url=None,
                     default_model=controller.settings.model.name,
                     models=(controller.settings.model.name,),
+                    compatibility="openai",
+                    managed=False,
                     active=True,
                 ),
             )
@@ -294,6 +317,110 @@ class RuntimeManagement:
     def reload_models(self) -> ModelCatalogSnapshot:
         self.runtime.catalog.reload()
         return self.model_catalog()
+
+    def delete_model_provider(self, provider: str) -> ModelCatalogSnapshot:
+        controller = self._controller_provider()
+        active_provider = (
+            controller.model_manager.provider
+            if controller.model_manager is not None
+            else self.runtime.provider
+        )
+        selected = self.runtime.model_state.load()
+        if provider == active_provider or (selected is not None and selected.provider == provider):
+            raise ValueError("cannot delete the active provider; switch models first")
+        ModelProfileWriter(self.runtime.catalog.path).delete(provider)
+        self.runtime.catalog.reload()
+        return self.model_catalog()
+
+    def delete_model(self, provider: str, model: str) -> ModelCatalogSnapshot:
+        controller = self._controller_provider()
+        active_provider = (
+            controller.model_manager.provider
+            if controller.model_manager is not None
+            else self.runtime.provider
+        )
+        if provider == active_provider and model == controller.settings.model.name:
+            raise ValueError("cannot delete the active model; switch models first")
+        ModelProfileWriter(self.runtime.catalog.path).delete_model(provider, model)
+        self.runtime.catalog.reload()
+        return self.model_catalog()
+
+    def update_model(
+        self,
+        *,
+        provider: str,
+        original_model: str,
+        model: str,
+        base_url: str,
+        compatibility: Literal["openai", "gemini"] = "openai",
+    ) -> ModelCatalogSnapshot:
+        controller = self._controller_provider()
+        active_provider = (
+            controller.model_manager.provider
+            if controller.model_manager is not None
+            else self.runtime.provider
+        )
+        editing_active = (
+            provider == active_provider and original_model == controller.settings.model.name
+        )
+        ModelProfileWriter(self.runtime.catalog.path).update_model(
+            provider=provider,
+            original_model=original_model,
+            model=model,
+            base_url=base_url,
+            compatibility=compatibility,
+        )
+        if editing_active:
+            self.runtime.model_state.save(provider=provider, model=model)
+            controller.settings.model.name = model
+            controller.sessions.append(
+                controller.session_id,
+                "configuration",
+                {"provider": provider, "model": model},
+            )
+        self.runtime.catalog.reload()
+        return self.model_catalog()
+
+    def probe_model(self) -> ModelProbeResult:
+        events = self.runtime.model.stream(
+            [{"role": "user", "content": "Reply with OK."}],
+            [],
+        )
+        for event in events:
+            if getattr(event, "type", "") != "error":
+                continue
+            raw = str(getattr(event, "error", ""))
+            lowered = raw.casefold()
+            if "401" in lowered or "api key" in lowered or "unauth" in lowered:
+                return ModelProbeResult(
+                    ok=False,
+                    category="authentication",
+                    message="API Key 无效，或密钥与服务地域不匹配。",
+                )
+            if "404" in lowered or ("model" in lowered and "not found" in lowered):
+                return ModelProbeResult(
+                    ok=False,
+                    category="model",
+                    message="Model ID 不存在，或当前账号无权访问该模型。",
+                )
+            if "429" in lowered or ("rate" in lowered and "limit" in lowered):
+                return ModelProbeResult(
+                    ok=False,
+                    category="rate_limit",
+                    message="服务商当前触发限流，请稍后重试。",
+                )
+            if "connect" in lowered or "timeout" in lowered or "network" in lowered:
+                return ModelProbeResult(
+                    ok=False,
+                    category="network",
+                    message="无法连接模型服务，请检查 Base URL、网络和代理设置。",
+                )
+            return ModelProbeResult(
+                ok=False,
+                category="provider",
+                message="模型服务拒绝了兼容性探测，请检查供应商配置。",
+            )
+        return ModelProbeResult(ok=True, category="ready", message="连接成功，模型可以响应。")
 
     def upsert_model_provider(
         self,
@@ -383,6 +510,114 @@ class RuntimeManagement:
         if skills is None:
             raise ValueError("skills are unavailable")
         skills.discover(include_repo=self.runtime.trusted_project)
+        return self.skills_snapshot()
+
+    def draft_skill(self, *, requirement: str, template: str) -> SkillDraft:
+        requirement = requirement.strip()
+        if not requirement or len(requirement) > 4000:
+            raise ValueError("skill requirement must contain 1-4000 characters")
+        fallback = self._fallback_skill_draft(requirement=requirement, template=template)
+        controller = self._controller_provider()
+        prompt = (
+            "Create a concise reusable SKILL.md draft from the user's requirement. "
+            "Return one JSON object only with string fields name, description, and instructions. "
+            "name must match ^[a-z0-9][a-z0-9_-]{0,63}$. instructions must be Markdown, "
+            "must describe triggers, a concrete workflow, safety boundaries, and expected output. "
+            "Do not include YAML frontmatter or hidden reasoning.\n\n"
+            f"Template category: {template}\nUser requirement: {requirement}"
+        )
+        chunks: list[str] = []
+        failed = False
+        for event in controller.model.stream(
+            [
+                {"role": "system", "content": "You write reviewable Forge Coding Agent skills."},
+                {"role": "user", "content": prompt},
+            ],
+            [],
+        ):
+            if event.type == "text_delta" and event.text:
+                chunks.append(event.text)
+            elif event.type == "error":
+                failed = True
+        if failed:
+            return fallback
+        try:
+            raw = "".join(chunks)
+            start = raw.index("{")
+            end = raw.rindex("}") + 1
+            value = json.loads(raw[start:end])
+            name = str(value["name"]).strip()
+            description = str(value["description"]).strip()
+            instructions = str(value["instructions"]).strip()
+            if (
+                not VALID_NAME.fullmatch(name)
+                or not description
+                or len(description) > 1000
+                or not instructions
+            ):
+                return fallback
+            return SkillDraft(
+                name=name,
+                description=description,
+                instructions=instructions,
+                generated_by="model",
+            )
+        except (KeyError, TypeError, ValueError):
+            return fallback
+
+    @staticmethod
+    def _fallback_skill_draft(*, requirement: str, template: str) -> SkillDraft:
+        names = {
+            "review": "code-review-helper",
+            "testing": "test-repair-helper",
+            "documentation": "documentation-helper",
+        }
+        labels = {
+            "review": "Review code changes against the stated project rules.",
+            "testing": "Run focused checks and repair reproducible failures.",
+            "documentation": "Maintain accurate, structured project documentation.",
+        }
+        name = names.get(template, "custom-workflow")
+        description = labels.get(template, requirement[:160])
+        instructions = (
+            "# Purpose\n\n"
+            f"{requirement}\n\n"
+            "# Workflow\n\n"
+            "1. Read the applicable project instructions and relevant files.\n"
+            "2. Confirm the requested scope and identify safety or approval boundaries.\n"
+            "3. Perform the smallest complete workflow that satisfies the request.\n"
+            "4. Verify the result and report concrete evidence, limitations, "
+            "and follow-up work.\n\n"
+            "# Safety\n\n"
+            "Stay within the active workspace, never expose secrets, and request approval for "
+            "operations covered by the runtime safety policy.\n"
+        )
+        return SkillDraft(
+            name=name,
+            description=description,
+            instructions=instructions,
+            generated_by="template",
+        )
+
+    def create_skill(
+        self,
+        *,
+        scope: Literal["user", "repo"],
+        name: str,
+        description: str,
+        instructions: str,
+    ) -> SkillsSnapshot:
+        if scope == "repo" and not self.runtime.trusted_project:
+            raise ValueError("project skills require a trusted workspace")
+        skills = self._controller_provider().skills
+        if skills is None:
+            raise ValueError("skills are unavailable")
+        skills.create(
+            scope=scope,
+            name=name,
+            description=description,
+            instructions=instructions,
+        )
         return self.skills_snapshot()
 
     def compact_context(self) -> CompactResult:

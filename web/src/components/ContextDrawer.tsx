@@ -10,12 +10,14 @@ import type {
   TimelineItem,
 } from "../state/store";
 import { ChangesSummary } from "./ChangesSummary";
-import { DiffViewer } from "./DiffViewer";
-import { FilePreview } from "./FilePreview";
+import { ChangeReviewPane } from "./ChangeReviewPane";
 import { CloseIcon } from "./icons";
-import { ModelManager, type ModelSetupInput } from "./ModelManager";
+import { ModelManager, type ModelSetupInput, type ModelUpdateInput } from "./ModelManager";
+import { modelOptions } from "./modelProviders";
 import { ResourceFileTree, type ResourceFileStatus } from "./ResourceFileTree";
+import { ResourcePreviewPane } from "./ResourcePreviewPane";
 import { StructuredToolDetail } from "./StructuredToolDetail";
+import { SkillCreator } from "./SkillCreator";
 
 export type InspectorTab = "changes" | "run" | "settings" | "resources" | "context";
 
@@ -26,7 +28,6 @@ interface ContextDrawerProps {
   changes: ChangeSummary[];
   filePreview: FilePreviewData | null;
   onPreview: (path: string) => void;
-  onUndoChange: (changeId: string) => void;
   onReviewChange: (changeId: string, decision: "accept" | "discard") => void;
   onReviewAll: (decision: "accept" | "discard") => void;
   timelineItems: TimelineItem[];
@@ -48,6 +49,9 @@ interface ContextDrawerProps {
   onModelProviderConfigure: (
     input: ModelSetupInput,
   ) => Promise<{ persisted: boolean; backend: string }>;
+  onModelProviderDelete: (provider: string) => void;
+  onModelUpdate: (input: ModelUpdateInput) => Promise<void> | void;
+  onModelDelete: (provider: string, model: string) => Promise<void> | void;
   onPermissionChange: (mode: "prompt" | "auto" | "read-only") => void;
   onStepsChange: (value: number) => boolean | void;
   onStepsReset: () => boolean | void;
@@ -60,6 +64,16 @@ interface ContextDrawerProps {
   onSkillsList: () => void;
   onSkillToggle: (name: string, enabled: boolean) => void;
   onSkillsReload: () => void;
+  onSkillDraft: (
+    requirement: string,
+    template: "custom" | "review" | "testing" | "documentation",
+  ) => boolean | void;
+  onSkillCreate: (input: {
+    scope: "user" | "repo";
+    name: string;
+    description: string;
+    instructions: string;
+  }) => boolean | void;
   onCompact: () => void;
 }
 
@@ -96,7 +110,6 @@ export function ContextDrawer(props: ContextDrawerProps) {
     initialTab = "changes",
   } = props;
   const [selectedId, setSelectedId] = useState<string | null>(null);
-  const [previewPath, setPreviewPath] = useState<string | null>(null);
   const [tab, setTab] = useState<InspectorTab>(initialTab);
   const [resourceTab, setResourceTab] = useState<"files" | "skills" | "memory">("files");
   const [resourcePreviewPath, setResourcePreviewPath] = useState<string | null>(null);
@@ -116,7 +129,11 @@ export function ContextDrawer(props: ContextDrawerProps) {
   const [verificationPending, setVerificationPending] = useState<string | null>(null);
   const [verificationFeedback, setVerificationFeedback] = useState("");
   const [modelManagerOpen, setModelManagerOpen] = useState(props.openModelManager ?? false);
-  const selected = changes.find((change) => change.id === selectedId);
+  const pendingChanges = useMemo(
+    () => changes.filter((change) => change.reviewStatus !== "accepted"),
+    [changes],
+  );
+  const selected = pendingChanges.find((change) => change.id === selectedId);
   const runItems = props.timelineItems.filter(
     (item): item is Extract<TimelineItem, { kind: "activity" }> =>
       item.kind === "activity" && ["command", "validation"].includes(item.activityKind),
@@ -204,11 +221,14 @@ export function ContextDrawer(props: ContextDrawerProps) {
   }, [pendingStepAction]);
 
   useEffect(() => {
-    if (selectedId !== null && !changes.some((change) => change.id === selectedId)) {
-      setSelectedId(null);
-      setPreviewPath(null);
-    }
-  }, [changes, selectedId]);
+    if (selectedId === null || pendingChanges.some((change) => change.id === selectedId)) return;
+    const previousIndex = changes.findIndex((change) => change.id === selectedId);
+    const next = previousIndex >= 0
+      ? [...changes.slice(previousIndex + 1), ...changes.slice(0, previousIndex)]
+        .find((change) => change.reviewStatus !== "accepted")
+      : pendingChanges[0];
+    setSelectedId(next?.id ?? null);
+  }, [changes, pendingChanges, selectedId]);
 
   const skillItems = useMemo(() => {
     const items = skillsState?.items ?? [];
@@ -222,6 +242,7 @@ export function ContextDrawer(props: ContextDrawerProps) {
   }, [skillQuery, skillsState?.items]);
 
   const modelValue = `${modelCatalog?.active?.provider ?? ""}\0${modelCatalog?.active?.id ?? modelName}`;
+  const availableModels = modelOptions(modelCatalog?.providers ?? []);
   const stepMinimum = runtime?.steps?.minimum ?? 12;
   const stepMaximum = runtime?.steps?.maximum ?? 100;
 
@@ -279,7 +300,7 @@ export function ContextDrawer(props: ContextDrawerProps) {
             }}
           >
             {tabLabels[value]}
-            {value === "changes" && changes.length ? ` ${changes.length}` : ""}
+            {value === "changes" && pendingChanges.length ? ` ${pendingChanges.length}` : ""}
           </button>
         ))}
       </div>
@@ -291,31 +312,10 @@ export function ContextDrawer(props: ContextDrawerProps) {
               selectedId={selected?.id}
               onSelect={(change) => {
                 setSelectedId((current) => (current === change.id ? null : change.id));
-                setPreviewPath(null);
               }}
               onReviewAll={props.onReviewAll}
               busy={busy}
             />
-            {selected ? (
-              <DiffViewer
-                change={selected}
-                onPreview={(path) => {
-                  if (previewPath === path) {
-                    setPreviewPath(null);
-                    return;
-                  }
-                  setPreviewPath(path);
-                  onPreview(path);
-                }}
-                onUndo={props.onUndoChange}
-                onReview={props.onReviewChange}
-                busy={busy}
-                previewOpen={previewPath === selected.path}
-                filePreview={
-                  filePreview && filePreview.path === selected.path ? filePreview : null
-                }
-              />
-            ) : null}
           </>
         ) : null}
 
@@ -349,33 +349,38 @@ export function ContextDrawer(props: ContextDrawerProps) {
                 <div><strong id="model-setting-title">模型</strong><small>OpenAI-compatible 服务商与模型</small></div>
                 <div className="settings-card-actions">
                   <button type="button" className="text-action" disabled={busy} onClick={props.onModelReload}>重新加载</button>
-                  <button type="button" className={modelManagerOpen ? "text-action" : "primary-small"} disabled={busy} onClick={() => setModelManagerOpen((value) => !value)}>
-                    {modelManagerOpen ? "收起" : "添加服务商"}
+                  <button type="button" className={modelManagerOpen ? "primary-small" : "text-action"} disabled={busy} onClick={() => setModelManagerOpen((value) => !value)}>
+                    {modelManagerOpen ? "完成" : "管理连接"}
                   </button>
                 </div>
               </div>
-              <select
-                aria-label="当前模型"
-                className="settings-select mono-label"
-                value={modelValue}
-                disabled={busy || !modelCatalog?.providers?.length}
-                onChange={(event) => {
-                  const [provider, modelId] = event.target.value.split("\0");
-                  props.onModelSelect(provider, modelId);
-                }}
-              >
-                {!modelCatalog?.providers?.length ? <option value={modelValue}>{modelName}</option> : null}
-                {modelCatalog?.providers?.flatMap((provider) =>
-                  (provider.models ?? [provider.default_model ?? ""]).filter(Boolean).map((model) => (
-                    <option key={`${provider.name}:${model}`} value={`${provider.name}\0${model}`}>
-                      {provider.name} · {model}
-                    </option>
-                  )),
-                )}
-              </select>
               {modelManagerOpen ? (
-                <ModelManager busy={busy} onConfigure={props.onModelProviderConfigure} />
-              ) : null}
+                <ModelManager
+                  busy={busy}
+                  providers={modelCatalog?.providers}
+                  activeProvider={modelCatalog?.active?.provider}
+                  activeModel={modelCatalog?.active?.id}
+                  onConfigure={props.onModelProviderConfigure}
+                  onUpdateModel={props.onModelUpdate}
+                  onDeleteModel={props.onModelDelete}
+                />
+              ) : (
+                <select
+                  aria-label="当前模型"
+                  className="settings-select mono-label"
+                  value={modelValue}
+                  disabled={busy || !availableModels.length}
+                  onChange={(event) => {
+                    const [provider, modelId] = event.target.value.split("\0");
+                    props.onModelSelect(provider, modelId);
+                  }}
+                >
+                  {!availableModels.length ? <option value={modelValue}>{modelName}</option> : null}
+                  {availableModels.map((option) => (
+                    <option key={option.value} value={option.value}>{option.label}</option>
+                  ))}
+                </select>
+              )}
             </section>
 
             <section className="settings-card" aria-labelledby="permission-setting-title">
@@ -533,13 +538,7 @@ export function ContextDrawer(props: ContextDrawerProps) {
                     }}
                   />
                 ) : <div className="resource-empty">当前会话还没有读取或修改文件</div>}
-                {resourcePreviewPath ? (
-                  filePreview && filePreview.path.replaceAll("\\", "/") === resourcePreviewPath
-                    ? <FilePreview file={filePreview} />
-                    : <div className="resource-preview-loading" role="status">正在读取 {resourcePreviewPath}…</div>
-                ) : (
-                  resourcePaths.length ? <div className="resource-preview-empty">选择文件以查看只读预览</div> : null
-                )}
+                {resourcePaths.length ? <div className="resource-preview-empty">选择文件，在检查器左侧查看只读预览</div> : null}
               </div>
             ) : resourceTab === "skills" ? (
               <div className="resource-panel">
@@ -547,6 +546,13 @@ export function ContextDrawer(props: ContextDrawerProps) {
                   <input type="search" value={skillQuery} onChange={(event) => setSkillQuery(event.target.value)} placeholder="搜索 Skills" aria-label="搜索 Skills" />
                   <button type="button" className="text-action" disabled={busy} onClick={props.onSkillsReload}>重新加载</button>
                 </div>
+                <SkillCreator
+                  busy={busy}
+                  draft={skillsState?.draft ?? null}
+                  items={skillsState?.items ?? []}
+                  onDraft={props.onSkillDraft}
+                  onCreate={props.onSkillCreate}
+                />
                 <div className="resource-list">
                   {skillItems.map((item) => {
                     const name = valueText(item.name);
@@ -624,6 +630,25 @@ export function ContextDrawer(props: ContextDrawerProps) {
           </div>
         ) : null}
       </div>
+      {tab === "resources" && resourceTab === "files" && resourcePreviewPath ? (
+        <ResourcePreviewPane
+          path={resourcePreviewPath}
+          drawerWidth={props.width}
+          file={filePreview}
+          onClose={() => setResourcePreviewPath(null)}
+        />
+      ) : null}
+      {tab === "changes" && selected ? (
+        <ChangeReviewPane
+          change={selected}
+          drawerWidth={props.width}
+          busy={busy}
+          onReview={props.onReviewChange}
+          onClose={() => {
+            setSelectedId(null);
+          }}
+        />
+      ) : null}
     </aside>
   );
 }

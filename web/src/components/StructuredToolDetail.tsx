@@ -1,3 +1,5 @@
+import { UnifiedDiff } from "./UnifiedDiff";
+
 interface StructuredToolDetailProps {
   detail: unknown;
   activityKind?: string;
@@ -24,7 +26,17 @@ const labels: Record<string, string> = {
   size: "大小",
 };
 
-const hiddenKeys = new Set(["ok", "retryable", "truncated", "hard_blocked", "summary"]);
+const hiddenKeys = new Set([
+  "ok",
+  "retryable",
+  "truncated",
+  "hard_blocked",
+  "summary",
+  "sha256",
+  "change_id",
+  "change_kind",
+  "reversible",
+]);
 const codeLikeKeys = new Set(["command", "stdout", "stderr", "output", "content", "diff"]);
 
 function record(value: unknown): Record<string, unknown> {
@@ -100,6 +112,7 @@ function ScalarValue({ field, value }: { field: string; value: unknown }) {
   }
   if (typeof value === "boolean") return <span>{value ? "是" : "否"}</span>;
   const text = String(value);
+  if (field === "diff") return <div className="structured-diff"><UnifiedDiff value={text} /></div>;
   if (codeLikeKeys.has(field) || text.includes("\n")) {
     return <pre className={field === "stderr" ? "is-error" : ""}><code>{text}</code></pre>;
   }
@@ -122,7 +135,7 @@ function StructuredFields({ value, depth = 0 }: { value: unknown; depth?: number
       {entries.map(([key, item]) => {
         const nested = typeof item === "object" && item !== null;
         return (
-          <div className="structured-field" key={key}>
+          <div className={`structured-field${key === "diff" ? " is-diff" : ""}`} key={key}>
             <dt>{labelFor(key)}</dt>
             <dd>{nested ? <StructuredFields value={item} depth={depth + 1} /> : <ScalarValue field={key} value={item} />}</dd>
           </div>

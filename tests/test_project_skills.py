@@ -164,3 +164,62 @@ def test_user_skill_disable_and_repo_opt_out(tmp_path: Path) -> None:
     assert not registry.skills["user-only"].enabled
     registry.set_enabled("user-only", True)
     assert registry.skills["user-only"].enabled
+
+
+def test_gui_skill_creation_is_confined_to_the_selected_skill_root(tmp_path: Path) -> None:
+    workspace = tmp_path / "repo"
+    user = tmp_path / "user"
+    workspace.mkdir()
+    registry = SkillRegistry(workspace=workspace, user_root=user)
+    registry.discover(include_repo=True)
+
+    personal = registry.create(
+        scope="user",
+        name="review-helper",
+        description="Review a change with the project conventions.",
+        instructions="# Workflow\n\n1. Read the relevant rules.\n2. Review the change.",
+    )
+    project = registry.create(
+        scope="repo",
+        name="project-check",
+        description="Run the project checks.",
+        instructions="# Workflow\n\nRun the documented checks and summarize failures.",
+    )
+
+    assert personal.skill_file == (user / "review-helper" / "SKILL.md").resolve()
+    assert (
+        project.skill_file
+        == (workspace / ".agents" / "skills" / "project-check" / "SKILL.md").resolve()
+    )
+    assert personal.source == "user"
+    assert project.source == "repo"
+    assert registry.skills["review-helper"].description.startswith("Review a change")
+    assert registry.skills["project-check"].description == "Run the project checks."
+
+
+def test_gui_skill_creation_rejects_overwrite_and_invalid_content(tmp_path: Path) -> None:
+    workspace = tmp_path / "repo"
+    workspace.mkdir()
+    registry = SkillRegistry(workspace=workspace, user_root=tmp_path / "user")
+    registry.discover(include_repo=True)
+    registry.create(
+        scope="repo",
+        name="safe-skill",
+        description="Safe instructions.",
+        instructions="# Workflow\n\nRead before acting.",
+    )
+
+    with pytest.raises(SkillError, match="already exists"):
+        registry.create(
+            scope="repo",
+            name="safe-skill",
+            description="Replacement.",
+            instructions="Overwrite the previous file.",
+        )
+    with pytest.raises(SkillError, match="instructions"):
+        registry.create(
+            scope="user",
+            name="empty-skill",
+            description="Missing instructions.",
+            instructions="   ",
+        )

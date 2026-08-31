@@ -1,5 +1,8 @@
 # Shared Provider Credentials Implementation Plan
 
+> **Status (2026-08-31):** Implemented and integrated. Retained as an engineering record; current
+> launch and provider-management instructions live in `README.md`.
+
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
 **Goal:** Share provider credentials securely across Electron, TUI, and one-shot CLI; stabilize desktop workspace launch; and clarify adjacent GUI turn boundaries.

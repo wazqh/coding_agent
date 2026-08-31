@@ -5,7 +5,7 @@ build-backend = "hatchling.build"
 [project]
 name = "forge-coding-agent"
 version = "1.0.0"
-description = "A safe, local-first CLI coding agent with sessions, memory, and skills."
+description = "A safe, local-first coding agent with terminal and Electron interfaces."
 readme = "README.md"
 requires-python = ">=3.11"
 license = {text = "MIT"}

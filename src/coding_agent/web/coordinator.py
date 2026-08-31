@@ -16,9 +16,11 @@ from coding_agent.runtime_management import (
     LifecycleState,
     MemorySnapshot,
     ModelCatalogSnapshot,
+    ModelProbeResult,
     ProviderConfigurationResult,
     RuntimeManagement,
     RuntimeSnapshot,
+    SkillDraft,
     SkillsSnapshot,
 )
 from coding_agent.safety.approval import ApprovalDecision, ApprovalRequest
@@ -207,6 +209,32 @@ class TurnCoordinator:
     def reload_models(self) -> ModelCatalogSnapshot:
         return self._require_idle_management().reload_models()
 
+    def delete_model_provider(self, provider: str) -> ModelCatalogSnapshot:
+        return self._require_idle_management().delete_model_provider(provider)
+
+    def delete_model(self, provider: str, model: str) -> ModelCatalogSnapshot:
+        return self._require_idle_management().delete_model(provider, model)
+
+    def update_model(
+        self,
+        *,
+        provider: str,
+        original_model: str,
+        model: str,
+        base_url: str,
+        compatibility: str,
+    ) -> ModelCatalogSnapshot:
+        return self._require_idle_management().update_model(
+            provider=provider,
+            original_model=original_model,
+            model=model,
+            base_url=base_url,
+            compatibility=compatibility,  # type: ignore[arg-type]
+        )
+
+    def probe_model(self) -> ModelProbeResult:
+        return self._require_idle_management().probe_model()
+
     def upsert_model_provider(
         self,
         *,
@@ -245,6 +273,27 @@ class TurnCoordinator:
 
     def reload_skills(self) -> SkillsSnapshot:
         return self._require_idle_management().reload_skills()
+
+    def draft_skill(self, *, requirement: str, template: str) -> SkillDraft:
+        return self._require_idle_management().draft_skill(
+            requirement=requirement,
+            template=template,
+        )
+
+    def create_skill(
+        self,
+        *,
+        scope: str,
+        name: str,
+        description: str,
+        instructions: str,
+    ) -> SkillsSnapshot:
+        return self._require_idle_management().create_skill(
+            scope=scope,  # type: ignore[arg-type]
+            name=name,
+            description=description,
+            instructions=instructions,
+        )
 
     def compact_context(self) -> CompactResult:
         return self._require_idle_management().compact_context()

@@ -59,7 +59,7 @@ test("does not accept or clear a task before the transport is ready", async () =
 
   const input = screen.getByRole("textbox", { name: "任务输入" });
   expect(input).toBeDisabled();
-  expect(screen.getByText("正在连接")).toBeInTheDocument();
+  expect(screen.queryByText("正在连接")).not.toBeInTheDocument();
   expect(onSend).not.toHaveBeenCalled();
 });
 

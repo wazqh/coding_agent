@@ -1,6 +1,6 @@
 # Forge Coding Agent
 
-Forge is an original Python 3.11+ local coding agent. It combines an Electron desktop workspace and
+Forge is an original Python 3.11/3.12 local coding agent. It combines an Electron desktop workspace and
 a scrolling professional terminal UI with a locally controlled model-tool-observation loop,
 resumable sessions, approved project memory, lazy `SKILL.md` workflows, and strict workspace safety.
 It does not use an agent framework, hosted code execution, or a remote file service.
@@ -29,8 +29,9 @@ when the user-level Python Scripts directory is not on `PATH`.
 
 ### Electron desktop
 
-The desktop client is currently delivered from source. Install the Python gateway and JavaScript
-dependencies once, then launch Electron with the workspace Forge may control:
+The desktop client is currently delivered from source and uses Node.js 22 for the documented
+development path. Install the Python gateway and JavaScript dependencies once, then launch Electron
+with the workspace Forge may control:
 
 ```powershell
 python -m pip install -e ".[desktop]"
@@ -45,15 +46,21 @@ launch, `& .\node_modules\.bin\electron.cmd . --cwd "D:\path\to\project"` remain
 takes precedence over `FORGE_WORKSPACE`. `FORGE_PYTHON` may select the Python executable used for
 the local runtime. The desktop provides project-organized sessions, a visible
 Agent activity timeline and plan, inline three-way approvals, Markdown output, `/`/`@`/`$`
-completion, model/provider onboarding, runtime controls, and a resizable task inspector. The
+completion, model/provider onboarding, runtime controls, and a resizable task inspector. Daily
+model switching is a flat model-first list; the lower-frequency connection manager separately
+handles provider metadata, credentials, and each provider's expandable model catalog. The
 inspector separates **Settings** (model, permissions, and Step budget) from **Run** (verification
 rules and execution evidence), while slash commands open the corresponding panel directly. Its
 **Resources** tab groups files read or changed in the current session into a collapsible tree; selecting
-a file opens the existing workspace-confined, read-only preview with metadata and line numbers. Approval,
+a file opens an adjacent workspace-confined, read-only preview with metadata and line numbers. The
+Skills view can turn a natural-language requirement into an editable draft, fall back to a local
+template when the model is unavailable, and writes only after the user chooses personal or
+trusted-project scope and confirms creation. Approval,
 execution, and result states share one operation card instead of producing duplicate receipts.
 The inspector keeps an append-only, restart-safe change ledger with unified/side-by-side/fullscreen
-Diff review, accept/discard one or all, and conflict-safe Undo. It resumes the most recent meaningful session for the selected
-workspace on launch instead of creating an empty conversation; **New conversation** is the explicit
+Diff review, **accept** or conflict-safe **undo** for one or all changes. It resumes the most recent
+meaningful session for the selected workspace on launch instead of creating an empty conversation;
+**New conversation** is the explicit
 way to start a clean session. Sessions can be deleted in place, together with only the Memory facts
 that carry evidence from that session. A project can be removed from Forge's recent list after
 confirming its exact path; this never deletes workspace files, Git data, sessions, or Memory. The
@@ -67,6 +74,12 @@ controlling WebSocket is accepted. Provider keys use the desktop credential brid
 renderer state, WebSocket frames, sessions, Memory, or `models.toml`. Remote Markdown resources are
 not loaded. Tool details are presented as labeled, human-readable fields; the normal interface does
 not expose raw JSON payloads.
+
+Do not append `-- --cwd ...` to `npm run desktop:dev`: npm interprets that form as a workspace
+selector in some versions. Use `FORGE_WORKSPACE`, or invoke the local Electron binary directly as
+shown above. During startup and deliberate model/workspace restarts, the renderer shows one
+transition state and retries the short gateway handshake before presenting a recoverable connection
+error.
 
 ### Multiple OpenAI-compatible providers
 
@@ -102,6 +115,18 @@ provider and model are restored on the next launch. `--model` temporarily overri
 model while retaining the selected provider. A non-empty `api_key_env` value always overrides the
 stored credential for that process. Without `models.toml`, the existing `OPENAI_API_KEY`,
 `OPENAI_BASE_URL`, and `CODING_AGENT_MODEL` flow remains unchanged.
+
+The desktop connection manager includes presets for OpenAI, Kimi, DeepSeek, Qwen/DashScope, GLM,
+Hunyuan, Gemini, OpenRouter, and regional Alibaba, Huawei, and Tencent MaaS gateways. Enter the
+**API root**, not a complete resource endpoint: Forge calls the OpenAI SDK's Chat Completions API
+and appends `/chat/completions` itself. For example, use
+`https://open.bigmodel.cn/api/paas/v4`, not a URL ending in `/chat/completions`. The form previews
+the final request URL and offers a one-click correction for common copied endpoints; the Python
+writer enforces the same rule for TUI and imported configurations. Saved providers can be edited,
+duplicated, or deleted, and a blank API Key while editing preserves the existing system credential.
+After switching, the desktop restarts the local runtime and performs a minimal connectivity probe
+that reports authentication, model, rate-limit, or network failures without exposing provider
+responses or secret values.
 
 ### Gemini through the OpenAI-compatible endpoint
 
@@ -159,6 +184,19 @@ Interactive management commands are:
 | `/resume [SESSION_ID]` / `/new` | Pick a recent workspace session or switch by ID; create a clean session. |
 | `/raw [on|off]` | Inspect or set complete, labeled tool details (never a raw JSON dump). |
 | `/clear` / `/exit` | Clear terminal output, or save the session and exit. |
+
+The local tool registry also exposes `list_symbols`, `find_definition`, and `find_references`.
+Python files use the standard-library AST; TypeScript/JavaScript, C/C++, Rust, Go, Java, and C# use
+a bounded lightweight lexical index. Parsed files are cached by modification time for the running
+process, all paths remain workspace-confined, and the GUI groups these read-only navigation calls
+with ordinary workspace exploration instead of exposing protocol payloads.
+
+Desktop presentation follows the same evidence-first rule as the TUI: plans are explicit tool
+state, routine read/search activity may be grouped without hiding mutations or failures, approval
+and execution update one operation card, and final model text remains distinct from deterministic
+validation receipts. The interface uses locally bundled fonts, readable secondary-text contrast,
+thin code scrollbars, directory guide lines, keyboard completion, and reduced-motion fallbacks;
+motion never carries status by itself.
 
 Run `/help COMMAND` inside the TUI for usage, scope, and side-effect details. Administrative
 changes report whether they affect only the current session/process or persistent project data.
@@ -233,7 +271,8 @@ records and 2,000 estimated tokens are injected.
 Skills are discovered from `.agents/skills/NAME/SKILL.md` in the repository and the user's
 `~/.agents/skills` directory. Only frontmatter metadata is read during discovery. Full instructions
 and confined resources are loaded after explicit `$name` use or a local `activate_skill` call; skill
-scripts never execute automatically.
+scripts never execute automatically. Desktop-created Skills are always reviewable before writing;
+project Skills require an already trusted workspace and existing names are never overwritten.
 
 ## Development and verification
 
@@ -283,3 +322,15 @@ The two-minute recording outline is in [`docs/demo-script.md`](docs/demo-script.
 status and intentionally deferred work are tracked in [`docs/roadmap.md`](docs/roadmap.md). No
 credentials, generated evaluation reports, session logs, or project memories should be committed or
 recorded.
+
+## Assessment delivery
+
+The assessment deadline is **2026-09-02 24:00 China Standard Time**. The submitted archive contains
+`README.txt` and one MP4 video only; `README.txt` is capped at 1000 Chinese characters and includes
+the public repository address, launch instructions, and feature summary. The video is capped at two
+minutes and 200 MB. The public repository must retain its pushed history and must not receive new
+commits after the deadline.
+
+These are delivery constraints from the supplied assessment brief, not automated guarantees.
+Clean-clone acceptance, the real-model evaluation, final video review, CI, and the exact demonstrated
+commit must all be checked again before submission.

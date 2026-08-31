@@ -138,4 +138,24 @@ describe("gateway process contract", () => {
     });
     expect(child.killed).toBe(true);
   });
+
+  it("surfaces a bounded, redacted gateway startup error", async () => {
+    const child = new FakeChild();
+    const gateway = new GatewayProcess(() => child);
+    const starting = gateway.start({
+      pythonExecutable: "python",
+      workspace: "D:\\repo",
+      timeoutMs: 1000,
+    });
+
+    child.stderr.write(
+      "error: model 'glm-retired' is not configured; key=AIzaSyExampleSecret123456789\n",
+    );
+    child.exitCode = 2;
+    child.emit("exit", 2, null);
+
+    await expect(starting).rejects.toThrow(
+      "model 'glm-retired' is not configured; key=[REDACTED]",
+    );
+  });
 });

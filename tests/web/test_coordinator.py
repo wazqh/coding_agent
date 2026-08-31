@@ -274,6 +274,89 @@ def test_management_mutation_is_rejected_while_turn_is_busy() -> None:
     assert coordinator.wait_until_idle(timeout=1)
 
 
+def test_coordinator_delegates_provider_deletion_and_model_probe() -> None:
+    coordinator = TurnCoordinator()
+    coordinator.attach_runtime(FakeRuntime(coordinator.handle_agent_event))
+    management = SimpleNamespace(
+        delete_model_provider=lambda provider: f"deleted:{provider}",
+        probe_model=lambda: "ready",
+    )
+    coordinator.attach_management(management)
+
+    assert coordinator.delete_model_provider("deepseek") == "deleted:deepseek"
+    assert coordinator.probe_model() == "ready"
+
+
+def test_coordinator_delegates_model_level_updates_and_deletion() -> None:
+    coordinator = TurnCoordinator()
+    coordinator.attach_runtime(FakeRuntime(coordinator.handle_agent_event))
+    calls: list[tuple[object, ...]] = []
+    management = SimpleNamespace(
+        update_model=lambda **values: calls.append(("update", values)) or "updated",
+        delete_model=lambda provider, model: calls.append(("delete", provider, model)) or "deleted",
+    )
+    coordinator.attach_management(management)
+
+    assert (
+        coordinator.update_model(
+            provider="glm",
+            original_model="glm-old",
+            model="glm-new",
+            base_url="https://example.test/v1",
+            compatibility="openai",
+        )
+        == "updated"
+    )
+    assert coordinator.delete_model("glm", "glm-new") == "deleted"
+    assert calls == [
+        (
+            "update",
+            {
+                "provider": "glm",
+                "original_model": "glm-old",
+                "model": "glm-new",
+                "base_url": "https://example.test/v1",
+                "compatibility": "openai",
+            },
+        ),
+        ("delete", "glm", "glm-new"),
+    ]
+
+
+def test_coordinator_delegates_reviewable_skill_drafting_and_creation() -> None:
+    coordinator = TurnCoordinator()
+    coordinator.attach_runtime(FakeRuntime(coordinator.handle_agent_event))
+    calls: list[tuple[object, ...]] = []
+    management = SimpleNamespace(
+        draft_skill=lambda **values: calls.append(("draft", values)) or "drafted",
+        create_skill=lambda **values: calls.append(("create", values)) or "created",
+    )
+    coordinator.attach_management(management)
+
+    assert coordinator.draft_skill(requirement="Review boundaries", template="review") == "drafted"
+    assert (
+        coordinator.create_skill(
+            scope="repo",
+            name="boundary-review",
+            description="Review boundaries.",
+            instructions="# Workflow\n\nRead the rules.",
+        )
+        == "created"
+    )
+    assert calls == [
+        ("draft", {"requirement": "Review boundaries", "template": "review"}),
+        (
+            "create",
+            {
+                "scope": "repo",
+                "name": "boundary-review",
+                "description": "Review boundaries.",
+                "instructions": "# Workflow\n\nRead the rules.",
+            },
+        ),
+    ]
+
+
 def test_coordinator_attaches_opaque_id_to_approval_round_trip() -> None:
     coordinator = TurnCoordinator()
     coordinator.attach_runtime(FakeRuntime(coordinator.handle_agent_event))

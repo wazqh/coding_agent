@@ -51,6 +51,7 @@ test("connects transport, renders semantic events, and sends a turn", async () =
   const store = createAgentStore();
   render(<App {...baseProps} transport={transport} store={store} />);
 
+  expect(screen.getByRole("status", { name: "正在启动本地 Agent" })).toBeInTheDocument();
   expect(screen.getByRole("textbox", { name: "任务输入" })).toBeDisabled();
   await waitFor(() => expect(transport.connect).toHaveBeenCalledOnce());
   act(() => {
@@ -89,6 +90,7 @@ test("connects transport, renders semantic events, and sends a turn", async () =
   expect(within(screen.getByRole("main", { name: "Agent 会话" })).getByText("检查项目"))
     .toBeInTheDocument();
   expect(screen.getByText("检查完成。")).toBeInTheDocument();
+  expect(screen.queryByRole("status", { name: "正在启动本地 Agent" })).not.toBeInTheDocument();
   expect(screen.getByRole("button", { name: "gemini-flash" })).toBeInTheDocument();
 
   act(() => store.setState({ busy: false }));
@@ -528,6 +530,59 @@ test("removes a recent project only after showing the exact safe scope", async (
   });
 });
 
+test("keeps daily model switching separate from connection management", async () => {
+  const user = userEvent.setup();
+  const transport = new FakeTransport();
+  render(<App {...baseProps} transport={transport} store={createAgentStore()} />);
+  await waitFor(() => expect(transport.connect).toHaveBeenCalledOnce());
+  act(() => {
+    transport.emit({
+      protocol_version: 2,
+      type: "snapshot",
+      seq: 1,
+      session_id: "a".repeat(24),
+      turn_id: null,
+      data: {
+        workspace_name: "coding_agent",
+        workspace_path: "D:\\codes\\coding_agent",
+        model: "glm-5.3-flash",
+        permissions: "prompt",
+        busy: false,
+      },
+    });
+    transport.emit({
+      protocol_version: 2,
+      type: "model.catalog.updated",
+      seq: 2,
+      session_id: "a".repeat(24),
+      turn_id: null,
+      data: {
+        catalog: {
+          active: { provider: "GLM", id: "glm-5.3-flash" },
+          providers: [{
+            name: "GLM",
+            default_model: "glm-5.3-flash",
+            models: ["glm-5.2-flash", "glm-5.3-flash"],
+            managed: true,
+            active: true,
+          }],
+        },
+      },
+    });
+  });
+
+  await user.type(screen.getByRole("textbox", { name: "任务输入" }), "/model{Enter}");
+  expect(screen.getByRole("combobox", { name: "当前模型" })).toBeInTheDocument();
+  expect(screen.getByRole("option", { name: "glm-5.2-flash · GLM" })).toBeInTheDocument();
+
+  await user.click(screen.getByRole("button", { name: "管理连接" }));
+  expect(screen.queryByRole("combobox", { name: "当前模型" })).not.toBeInTheDocument();
+  expect(screen.getByText("模型连接")).toBeInTheDocument();
+
+  await user.click(screen.getByRole("button", { name: "完成" }));
+  expect(screen.getByRole("combobox", { name: "当前模型" })).toBeInTheDocument();
+});
+
 test("configures a provider through desktop IPC without sending the API key over transport", async () => {
   const user = userEvent.setup();
   const transport = new FakeTransport();
@@ -538,7 +593,10 @@ test("configures a provider through desktop IPC without sending the API key over
   }));
   const commitProviderCredential = vi.fn(async () => true);
   const rollbackProviderCredential = vi.fn(async () => true);
-  const restartGateway = vi.fn(async () => undefined);
+  let finishRestart: () => void = () => undefined;
+  const restartGateway = vi.fn(() => new Promise<void>((resolve) => {
+    finishRestart = resolve;
+  }));
   Object.defineProperty(window, "forgeDesktop", {
     configurable: true,
     value: {
@@ -575,6 +633,8 @@ test("configures a provider through desktop IPC without sending the API key over
 
   await user.type(screen.getByRole("textbox", { name: "任务输入" }), "/model{Enter}");
   expect(screen.getByRole("tab", { name: "设置" })).toHaveAttribute("aria-selected", "true");
+  await user.click(screen.getByRole("button", { name: "管理连接" }));
+  await user.click(screen.getByRole("button", { name: "添加连接" }));
   await user.type(await screen.findByLabelText("Model ID"), "vendor/fast-model");
   await user.type(screen.getByLabelText("API Key"), "top-secret");
   await user.click(screen.getByRole("button", { name: "保存并切换" }));
@@ -605,7 +665,12 @@ test("configures a provider through desktop IPC without sending the API key over
   await waitFor(() => expect(restartGateway).toHaveBeenCalledWith({
     workspace: "D:\\codes\\coding_agent",
     sessionId: "a".repeat(24),
+    probeModel: true,
   }));
+  act(() => transport.emitStatus("disconnected"));
+  expect(screen.getByRole("status", { name: "正在应用模型配置" })).toBeInTheDocument();
+  expect(screen.queryByRole("alert", { name: "无法连接本地 Agent" })).not.toBeInTheDocument();
+  act(() => finishRestart());
   Reflect.deleteProperty(window, "forgeDesktop");
 });
 
@@ -653,6 +718,8 @@ test("rolls back a staged provider credential when metadata persistence fails", 
   });
 
   await user.type(screen.getByRole("textbox", { name: "任务输入" }), "/model{Enter}");
+  await user.click(screen.getByRole("button", { name: "管理连接" }));
+  await user.click(screen.getByRole("button", { name: "添加连接" }));
   await user.type(await screen.findByLabelText("Model ID"), "vendor/fast-model");
   await user.type(screen.getByLabelText("API Key"), "top-secret");
   await user.click(screen.getByRole("button", { name: "保存并切换" }));
@@ -685,7 +752,10 @@ test("shows project picker progress and restarts the desktop gateway for the sel
     resolveSelection = resolve;
   });
   const selectWorkspace = vi.fn(() => selection);
-  const restartGateway = vi.fn(async () => undefined);
+  let finishRestart: () => void = () => undefined;
+  const restartGateway = vi.fn(() => new Promise<void>((resolve) => {
+    finishRestart = resolve;
+  }));
   Object.defineProperty(window, "forgeDesktop", {
     configurable: true,
     value: {
@@ -714,4 +784,8 @@ test("shows project picker progress and restarts the desktop gateway for the sel
   await waitFor(() =>
     expect(restartGateway).toHaveBeenCalledWith({ workspace: "D:\\codes\\selected-project" }),
   );
+  act(() => transport.emitStatus("disconnected"));
+  expect(screen.getByRole("status", { name: "正在切换项目" })).toBeInTheDocument();
+  expect(screen.queryByRole("alert", { name: "无法连接本地 Agent" })).not.toBeInTheDocument();
+  act(() => finishRestart());
 });

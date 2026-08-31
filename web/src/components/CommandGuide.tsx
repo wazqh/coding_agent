@@ -19,14 +19,16 @@ export function CommandGuide({ commands, onClose, onChoose }: CommandGuideProps)
           <CloseIcon />
         </button>
       </header>
-      <div className="command-guide-list">
+      <ul className="command-guide-list" aria-label="可用命令">
         {commands.map((command) => (
-          <button type="button" key={command.label} onClick={() => onChoose(command.insert_text)}>
-            <strong className="mono-label">{command.label}</strong>
-            <span>{command.description}</span>
-          </button>
+          <li key={command.label}>
+            <button type="button" onClick={() => onChoose(command.insert_text)}>
+              <strong className="mono-label">{command.label}</strong>
+              <span>{command.description}</span>
+            </button>
+          </li>
         ))}
-      </div>
+      </ul>
     </section>
   );
 }

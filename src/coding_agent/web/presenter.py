@@ -8,7 +8,14 @@ from coding_agent.events import AgentEvent, AgentState, EventKind
 from coding_agent.web.changes import summarize_diff
 from coding_agent.web.protocol import ViewEvent, ViewEventType
 
-_ROUTINE_TOOLS = {"read_file", "list_files", "search_text"}
+_ROUTINE_TOOLS = {
+    "read_file",
+    "list_files",
+    "search_text",
+    "list_symbols",
+    "find_definition",
+    "find_references",
+}
 _VALIDATION_COMMANDS = re.compile(
     r"(?:^|[;&|]\s*)(?:"
     r"(?:python\s+-m\s+)?(?:pytest|ruff|mypy|build)(?:\s|$)|"
@@ -361,7 +368,13 @@ class AgentEventPresenter:
         if name == "list_files":
             return f"浏览 {arguments.get('path', '.')}"
         if name == "search_text":
-            return f"搜索 {arguments.get('query', '文本')}"
+            return f"搜索 {arguments.get('pattern', arguments.get('query', '文本'))}"
+        if name == "list_symbols":
+            return f"索引 {arguments.get('path', '.')} 的符号"
+        if name == "find_definition":
+            return f"查找 {arguments.get('symbol', '符号')} 的定义"
+        if name == "find_references":
+            return f"查找 {arguments.get('symbol', '符号')} 的引用"
         if name == "run_command":
             return str(arguments.get("command", name))
         if name in {"apply_patch", "edit_file", "write_file", "replace_text"}:
@@ -404,6 +417,8 @@ class AgentEventPresenter:
             role = message.get("role")
             content = message.get("content")
             if role not in {"user", "assistant"} or not isinstance(content, str):
+                continue
+            if role == "assistant" and message.get("tool_calls"):
                 continue
             self._seq += 1
             result.append(

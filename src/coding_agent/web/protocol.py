@@ -166,6 +166,32 @@ class ModelProviderUpsertRequest(RequestFrame):
     compatibility: Literal["openai", "gemini"] = "openai"
 
 
+class ModelProviderDeleteRequest(RequestFrame):
+    type: Literal["model.provider.delete"]
+    provider: str = Field(min_length=1, max_length=64, pattern=r"^[A-Za-z0-9_.-]+$")
+    confirm: Literal[True]
+
+
+class ModelUpdateRequest(RequestFrame):
+    type: Literal["model.update"]
+    provider: str = Field(min_length=1, max_length=64, pattern=r"^[A-Za-z0-9_.-]+$")
+    original_model: str = Field(min_length=1, max_length=256)
+    model: str = Field(min_length=1, max_length=256)
+    base_url: str = Field(min_length=8, max_length=2048)
+    compatibility: Literal["openai", "gemini"] = "openai"
+
+
+class ModelDeleteRequest(RequestFrame):
+    type: Literal["model.delete"]
+    provider: str = Field(min_length=1, max_length=64, pattern=r"^[A-Za-z0-9_.-]+$")
+    model: str = Field(min_length=1, max_length=256)
+    confirm: Literal[True]
+
+
+class ModelProbeRequest(RequestFrame):
+    type: Literal["model.probe"]
+
+
 class MemoryListRequest(RequestFrame):
     type: Literal["memory.list"]
 
@@ -202,6 +228,20 @@ class SkillsToggleRequest(RequestFrame):
 
 class SkillsReloadRequest(RequestFrame):
     type: Literal["skills.reload"]
+
+
+class SkillsDraftRequest(RequestFrame):
+    type: Literal["skills.draft"]
+    requirement: str = Field(min_length=1, max_length=4000)
+    template: Literal["custom", "review", "testing", "documentation"] = "custom"
+
+
+class SkillsCreateRequest(RequestFrame):
+    type: Literal["skills.create"]
+    scope: Literal["user", "repo"]
+    name: str = Field(min_length=1, max_length=64, pattern=r"^[a-z0-9][a-z0-9_-]{0,63}$")
+    description: str = Field(min_length=1, max_length=1000)
+    instructions: str = Field(min_length=1, max_length=65_536)
 
 
 class ContextGetRequest(RequestFrame):
@@ -241,6 +281,10 @@ ClientRequest: TypeAlias = Annotated[
     | ModelSelectRequest
     | ModelReloadRequest
     | ModelProviderUpsertRequest
+    | ModelProviderDeleteRequest
+    | ModelUpdateRequest
+    | ModelDeleteRequest
+    | ModelProbeRequest
     | MemoryListRequest
     | MemoryToggleRequest
     | MemoryRememberRequest
@@ -249,6 +293,8 @@ ClientRequest: TypeAlias = Annotated[
     | SkillsListRequest
     | SkillsToggleRequest
     | SkillsReloadRequest
+    | SkillsDraftRequest
+    | SkillsCreateRequest
     | ContextGetRequest
     | ContextCompactRequest,
     Field(discriminator="type"),
@@ -285,6 +331,7 @@ class ViewEventType(StrEnum):
     MODEL_CATALOG_UPDATED = "model.catalog.updated"
     MEMORY_UPDATED = "memory.updated"
     SKILLS_UPDATED = "skills.updated"
+    SKILL_DRAFTED = "skill.drafted"
     CONTEXT_COMPACTED = "context.compacted"
 
 

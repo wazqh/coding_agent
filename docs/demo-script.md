@@ -1,22 +1,31 @@
 # 120-second Electron desktop demo script
 
-Prepare a disposable repository with one small failing authentication test and one proposed source
-change. Launch the release-candidate source build at 1920×1080 and keep credentials, personal paths,
-notifications, and terminal history outside the recording frame. The desktop and TUI share the same
-local controller; show a real model/tool/approval/test loop, not the mocked Playwright fixture.
+Use a disposable Python repository with a small slug/date/authentication function, one failing pytest,
+and a project verification command already saved as `python -m pytest -q`. Configure the model before
+recording, close unrelated windows and notifications, and launch the exact candidate commit at
+1920×1080. The recording must use a real model and local tools; the mocked Playwright path is only an
+automated renderer check.
+
+```powershell
+python -m pip install -e ".[desktop]"
+Set-Location web
+npm ci
+$env:FORGE_WORKSPACE = "D:\path\to\disposable-demo-repo"
+npm run desktop:dev
+```
 
 | Time | Demonstration |
 | --- | --- |
-| 0:00–0:10 | Open Forge Coding Agent on the prepared project. Confirm it restores the prepared project session without adding an unnamed conversation; show the project/session tree, active model, permission mode, and task inspector entry. |
-| 0:10–0:23 | Click **新对话**, enter “修复认证逻辑并运行相关测试”, and send. Show the user task as a distinct surface and the composer changing to Stop. |
-| 0:23–0:42 | Let the visible working receipt show the current step, grouped read/search activity, and the plan progressing from top to bottom. Keep complete labeled tool details collapsed. |
-| 0:42–1:02 | Pause on the inline approval card. Expand the proposed Diff, identify its workspace-relative path, then choose **允许一次**. |
-| 1:02–1:20 | Show the project verification hook running the focused test, one structured failure if available, the bounded correction, and the green deterministic validation receipt. Do not linger on repetitive tool calls. |
-| 1:20–1:35 | Keep the final Markdown answer fully expanded. Show completion and verification evidence without exposing hidden reasoning. |
-| 1:35–1:50 | Open **任务检查器 → 变更**, select one changed file, switch unified/side-by-side Diff once, then briefly show the contextual file tree and safe read-only preview under **资源**. Point out restart-safe review without triggering Undo. |
-| 1:50–2:00 | Return to the conversation and state that Electron and TUI share the original Python `AgentController`, local tools, approvals, sessions, Memory, Skills, and workspace boundary. |
+| 0:00–0:10 | Open Forge Coding Agent. Let the connection transition finish, then show the restored project/session, active model, permission mode, and project-organized history. No unnamed Session should be created just by launch. |
+| 0:10–0:23 | Start **新对话** and ask: “修复日期解析的边界错误，补回归测试并运行项目验证；不要修改无关文件。” Show `/`, `@file`, or `$skill` completion briefly without sending completion text to the model. |
+| 0:23–0:42 | Let the visible execution trace show the plan and grouped read/search/symbol-navigation activity. Keep routine details collapsed; mutation, failure, and validation rows remain individually visible. |
+| 0:42–1:02 | Pause at the inline edit approval. Expand the proposed colored Diff, identify the workspace-relative path, and choose **允许一次**. Mention that workspace escape and hard-destructive commands are blocked before approval. |
+| 1:02–1:22 | Show the saved project verification command run through the same command safety/approval boundary. If the first test fails, show one bounded repair cycle; otherwise show the deterministic passing receipt. Do not claim validation that is not visible. |
+| 1:22–1:38 | Keep the final Markdown answer expanded. Show the concise completion evidence and confirm that plans/actions/results are visible while hidden chain-of-thought is neither requested nor rendered. |
+| 1:38–1:53 | Open **任务检查器 → 变更**, select the changed file, and switch once between unified and side-by-side review. Open **资源** and show the adjacent workspace-confined read-only file preview with line numbers. Do not trigger Undo in the recorded candidate. |
+| 1:53–2:00 | State: “Electron 与 TUI 共用自研 Python AgentController、本地工具、审批、会话、Memory、Skills 和工作区安全边界；Electron 只负责呈现与受限管理。” |
 
-Before submission, watch the exported file once and verify that it is at most two minutes and
-200 MB. Confirm that no API key, token, account path, unrelated personal data, hidden notification,
-or private chain-of-thought is visible. Archive the exact demonstrated commit and keep a TUI capture
-fallback in case the desktop recording environment fails.
+Before submission, watch the exported file from start to finish. Require MP4, duration at most two
+minutes, size at most 200 MB, legible text, and no API key, token, credential dialog, account path,
+private repository content, unrelated personal data, notification, raw protocol JSON, or hidden
+chain-of-thought. Archive the demonstrated commit and retain a TUI capture fallback outside Git.

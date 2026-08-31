@@ -645,3 +645,27 @@ test("stores live turn progress until the turn finishes", () => {
   });
   expect(store.getState().progress).toBeNull();
 });
+
+test("stores a generated skill draft for review before creation", () => {
+  const store = createAgentStore();
+  store.getState().applyEvent({
+    protocol_version: 2,
+    type: "skill.drafted",
+    seq: 1,
+    session_id: sessionId,
+    turn_id: null,
+    data: {
+      draft: {
+        name: "boundary-review",
+        description: "Review workspace boundaries.",
+        instructions: "# Workflow\n\nReview the change.",
+        generated_by: "model",
+      },
+    },
+  });
+
+  expect(store.getState().skillsState?.draft).toMatchObject({
+    name: "boundary-review",
+    generated_by: "model",
+  });
+});

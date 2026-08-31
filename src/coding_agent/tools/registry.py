@@ -18,6 +18,12 @@ from coding_agent.tools.filesystem import (
 )
 from coding_agent.tools.plan import UpdatePlanTool
 from coding_agent.tools.skill import ActivateSkillTool, ReadSkillResourceTool
+from coding_agent.tools.symbols import (
+    FindDefinitionTool,
+    FindReferencesTool,
+    ListSymbolsTool,
+    SymbolIndex,
+)
 
 
 class ToolRegistry:
@@ -62,12 +68,16 @@ class ToolRegistry:
 
 
 def default_registry() -> ToolRegistry:
+    symbol_index = SymbolIndex()
     return ToolRegistry(
         [
             UpdatePlanTool(),
             ListFilesTool(),
             ReadFileTool(),
             SearchTextTool(),
+            ListSymbolsTool(symbol_index),
+            FindDefinitionTool(symbol_index),
+            FindReferencesTool(symbol_index),
             EditFileTool(),
             WriteFileTool(),
             RunCommandTool(),

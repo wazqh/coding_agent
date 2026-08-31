@@ -32,10 +32,14 @@ from coding_agent.web.protocol import (
     MemoryListRequest,
     MemoryRememberRequest,
     MemoryToggleRequest,
+    ModelDeleteRequest,
     ModelListRequest,
+    ModelProbeRequest,
+    ModelProviderDeleteRequest,
     ModelProviderUpsertRequest,
     ModelReloadRequest,
     ModelSelectRequest,
+    ModelUpdateRequest,
     PermissionsGetRequest,
     PermissionsSetRequest,
     PlanGetRequest,
@@ -45,6 +49,8 @@ from coding_agent.web.protocol import (
     SessionDeleteRequest,
     SessionListRequest,
     SessionResumeRequest,
+    SkillsCreateRequest,
+    SkillsDraftRequest,
     SkillsListRequest,
     SkillsReloadRequest,
     SkillsToggleRequest,
@@ -257,12 +263,12 @@ def _dispatch_request(coordinator: TurnCoordinator, request: object) -> None:
         try:
             if isinstance(request, ChangeReviewRequest):
                 result = coordinator.review_change(request.change_id, request.decision)
-                title = "接受变更" if request.decision == "accept" else "放弃变更"
+                title = "接受变更" if request.decision == "accept" else "撤销变更"
                 summary = str(result["path"])
                 activity_id = f"review:{request.change_id}"
             else:
                 result = coordinator.review_all_changes(request.decision)
-                title = "接受全部变更" if request.decision == "accept" else "放弃全部变更"
+                title = "接受全部变更" if request.decision == "accept" else "撤销全部变更"
                 summary = f"已处理 {result['processed']} 处"
                 activity_id = f"review-all:{request.decision}"
         except (CoordinatorError, OSError, ValueError) as exc:
@@ -452,6 +458,73 @@ def _dispatch_request(coordinator: TurnCoordinator, request: object) -> None:
             },
         )
         return
+    if isinstance(request, ModelProviderDeleteRequest):
+        catalog = coordinator.delete_model_provider(request.provider)
+        coordinator.emit(
+            ViewEventType.MODEL_CATALOG_UPDATED,
+            {"catalog": catalog.model_dump(mode="json")},
+        )
+        coordinator.emit(
+            ViewEventType.COMMAND_COMPLETED,
+            {
+                "command": request.type,
+                "status": "completed",
+                "provider": request.provider,
+            },
+        )
+        return
+    if isinstance(request, ModelUpdateRequest):
+        catalog = coordinator.update_model(
+            provider=request.provider,
+            original_model=request.original_model,
+            model=request.model,
+            base_url=request.base_url,
+            compatibility=request.compatibility,
+        )
+        coordinator.emit(
+            ViewEventType.MODEL_CATALOG_UPDATED,
+            {"catalog": catalog.model_dump(mode="json")},
+        )
+        coordinator.emit(
+            ViewEventType.COMMAND_COMPLETED,
+            {
+                "command": request.type,
+                "status": "completed",
+                "provider": request.provider,
+                "model": request.model,
+                "requires_restart": True,
+            },
+        )
+        return
+    if isinstance(request, ModelDeleteRequest):
+        catalog = coordinator.delete_model(request.provider, request.model)
+        provider_deleted = not any(item.name == request.provider for item in catalog.providers)
+        coordinator.emit(
+            ViewEventType.MODEL_CATALOG_UPDATED,
+            {"catalog": catalog.model_dump(mode="json")},
+        )
+        coordinator.emit(
+            ViewEventType.COMMAND_COMPLETED,
+            {
+                "command": request.type,
+                "status": "completed",
+                "provider": request.provider,
+                "model": request.model,
+                "provider_deleted": provider_deleted,
+            },
+        )
+        return
+    if isinstance(request, ModelProbeRequest):
+        probe = coordinator.probe_model()
+        coordinator.emit(
+            ViewEventType.COMMAND_COMPLETED,
+            {
+                "command": request.type,
+                "status": "completed" if probe.ok else "failed",
+                "probe": probe.model_dump(mode="json"),
+            },
+        )
+        return
     if isinstance(request, MemoryListRequest):
         memory = coordinator.memory_snapshot()
         coordinator.emit(
@@ -485,6 +558,41 @@ def _dispatch_request(coordinator: TurnCoordinator, request: object) -> None:
         coordinator.emit(
             ViewEventType.SKILLS_UPDATED,
             {"skills": skills.model_dump(mode="json")},
+        )
+        return
+    if isinstance(request, SkillsDraftRequest):
+        draft = coordinator.draft_skill(
+            requirement=request.requirement,
+            template=request.template,
+        )
+        coordinator.emit(
+            ViewEventType.SKILL_DRAFTED,
+            {"draft": draft.model_dump(mode="json")},
+        )
+        coordinator.emit(
+            ViewEventType.COMMAND_COMPLETED,
+            {"command": request.type, "status": "completed"},
+        )
+        return
+    if isinstance(request, SkillsCreateRequest):
+        skills = coordinator.create_skill(
+            scope=request.scope,
+            name=request.name,
+            description=request.description,
+            instructions=request.instructions,
+        )
+        coordinator.emit(
+            ViewEventType.SKILLS_UPDATED,
+            {"skills": skills.model_dump(mode="json"), "clear_draft": True},
+        )
+        coordinator.emit(
+            ViewEventType.COMMAND_COMPLETED,
+            {
+                "command": request.type,
+                "status": "completed",
+                "name": request.name,
+                "scope": request.scope,
+            },
         )
         return
     if isinstance(request, (SkillsToggleRequest, SkillsReloadRequest)):

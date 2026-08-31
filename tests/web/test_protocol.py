@@ -147,6 +147,43 @@ def test_view_event_serializes_without_secret_fields() -> None:
             },
             "model.provider.upsert",
         ),
+        (
+            "model.provider.delete",
+            {"provider": "open-router", "confirm": True},
+            "model.provider.delete",
+        ),
+        (
+            "model.update",
+            {
+                "provider": "glm",
+                "original_model": "glm-5.2-flash",
+                "model": "glm-5.2-air",
+                "base_url": "https://open.bigmodel.cn/api/paas/v4",
+                "compatibility": "openai",
+            },
+            "model.update",
+        ),
+        (
+            "model.delete",
+            {"provider": "glm", "model": "glm-5.2-flash", "confirm": True},
+            "model.delete",
+        ),
+        ("model.probe", {}, "model.probe"),
+        (
+            "skills.draft",
+            {"requirement": "Review workspace boundaries", "template": "review"},
+            "skills.draft",
+        ),
+        (
+            "skills.create",
+            {
+                "scope": "repo",
+                "name": "boundary-review",
+                "description": "Review workspace boundaries.",
+                "instructions": "# Workflow\n\nRead the rules and review the change.",
+            },
+            "skills.create",
+        ),
     ],
 )
 def test_protocol_v2_accepts_management_requests(
@@ -178,6 +215,31 @@ def test_steps_set_rejects_values_below_twelve() -> None:
                 "type": "steps.set",
                 "request_id": "steps-low",
                 "value": 11,
+            }
+        )
+
+
+def test_skill_creation_rejects_invalid_names_and_unbounded_drafts() -> None:
+    with pytest.raises(ValidationError):
+        parse_client_request(
+            {
+                "protocol_version": 2,
+                "type": "skills.create",
+                "request_id": "skill-invalid",
+                "scope": "repo",
+                "name": "../escape",
+                "description": "Invalid path.",
+                "instructions": "Do not write outside the root.",
+            }
+        )
+    with pytest.raises(ValidationError):
+        parse_client_request(
+            {
+                "protocol_version": 2,
+                "type": "skills.draft",
+                "request_id": "skill-long",
+                "requirement": "x" * 4001,
+                "template": "custom",
             }
         )
 

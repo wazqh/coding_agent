@@ -96,6 +96,32 @@ def test_presenter_pairs_tool_results_and_groups_routine_activity() -> None:
     assert search_result.data["detail"]["steps"][1]["summary"] == "found 3 matches"
 
 
+def test_presenter_groups_symbol_navigation_as_read_only_workspace_activity() -> None:
+    presenter = AgentEventPresenter()
+
+    outline = presenter.present(
+        _event(
+            EventKind.TOOL_CALL,
+            {"id": "symbols", "name": "list_symbols", "arguments": {"path": "src/app.py"}},
+        )
+    )[0]
+    definition = presenter.present(
+        _event(
+            EventKind.TOOL_CALL,
+            {
+                "id": "definition",
+                "name": "find_definition",
+                "arguments": {"symbol": "main", "path": "src"},
+            },
+        )
+    )[0]
+
+    assert outline.data["kind"] == "workspace_check"
+    assert outline.data["summary"] == "索引 src/app.py 的符号"
+    assert definition.data["activity_id"] == outline.data["activity_id"]
+    assert definition.data["summary"] == "查找 main 的定义"
+
+
 def test_presenter_separates_command_validation_from_routine_activity() -> None:
     presenter = AgentEventPresenter()
     call = presenter.present(
@@ -399,3 +425,63 @@ def test_history_uses_final_messages_and_ignores_text_deltas() -> None:
         ("assistant", "final answer"),
     ]
     assert all(item.type is ViewEventType.MESSAGE_FINAL for item in history)
+
+
+def test_history_does_not_present_tool_bearing_assistant_content_as_a_final_answer() -> None:
+    records = [
+        {
+            "type": "message",
+            "data": {"role": "user", "content": "inspect the project"},
+        },
+        {
+            "type": "message",
+            "data": {
+                "role": "assistant",
+                "content": "I will inspect the project first.",
+                "tool_calls": [
+                    {
+                        "id": "call-1",
+                        "type": "function",
+                        "function": {
+                            "name": "read_file",
+                            "arguments": '{"path":"README.md"}',
+                        },
+                    }
+                ],
+            },
+        },
+        {
+            "type": "event",
+            "data": _event(
+                EventKind.TOOL_CALL,
+                {
+                    "id": "call-1",
+                    "name": "read_file",
+                    "arguments": {"path": "README.md"},
+                },
+            ).model_dump(mode="json"),
+        },
+        {
+            "type": "event",
+            "data": _event(
+                EventKind.TOOL_RESULT,
+                {
+                    "id": "call-1",
+                    "name": "read_file",
+                    "result": {"ok": True, "summary": "read README.md", "data": {}},
+                },
+            ).model_dump(mode="json"),
+        },
+        {
+            "type": "message",
+            "data": {"role": "assistant", "content": "The project is ready."},
+        },
+    ]
+
+    history = AgentEventPresenter().present_history(SESSION_ID, records)
+
+    final_messages = [
+        item.data["content"] for item in history if item.type is ViewEventType.MESSAGE_FINAL
+    ]
+    assert final_messages == ["inspect the project", "The project is ready."]
+    assert any(item.type is ViewEventType.ACTIVITY_UPSERT for item in history)

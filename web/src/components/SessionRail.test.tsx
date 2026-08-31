@@ -1,4 +1,4 @@
-import { render, screen } from "@testing-library/react";
+import { fireEvent, render, screen } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { vi } from "vitest";
 
@@ -198,6 +198,39 @@ test("opens a non-current project when its project row is selected", async () =>
   await user.click(screen.getByRole("treeitem", { name: "demo" }));
 
   expect(onOpenProject).toHaveBeenCalledWith("D:\\codes\\demo");
+});
+
+test("uses a recognizable project remove control and exposes it from the context menu", async () => {
+  const user = userEvent.setup();
+  const onRemoveProject = vi.fn();
+  const { container } = render(
+    <SessionRail
+      productName="Forge"
+      workspaceName="coding_agent"
+      busy={false}
+      open
+      sessions={sessions}
+      projects={projects}
+      activeSessionId={null}
+      onNewSession={() => undefined}
+      onResumeSession={() => undefined}
+      onRemoveProject={onRemoveProject}
+    />,
+  );
+
+  const remove = screen.getByRole("button", { name: "从 Forge 移除项目 demo" });
+  expect(remove.querySelector("svg")).not.toBeNull();
+  expect(remove).not.toHaveTextContent("···");
+
+  const projectRow = screen.getByRole("treeitem", { name: "demo" }).closest(".project-row");
+  expect(projectRow).not.toBeNull();
+  fireEvent.contextMenu(projectRow!);
+  expect(screen.getByRole("alertdialog", { name: "移除项目demo" })).toBeInTheDocument();
+  expect(screen.getByText("不会删除工作区文件、Git 数据、会话或 Memory。")).toBeInTheDocument();
+
+  await user.click(screen.getByRole("button", { name: "确认从 Forge 移除 demo" }));
+  expect(onRemoveProject).toHaveBeenCalledWith("D:\\codes\\demo");
+  expect(container.querySelector(".project-remove-confirm")).toBeNull();
 });
 
 test("keeps the collapse control in the rail header and exposes project picker progress", () => {

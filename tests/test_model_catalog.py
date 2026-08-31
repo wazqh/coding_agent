@@ -92,6 +92,27 @@ def test_catalog_falls_back_to_shared_provider_credential(tmp_path: Path) -> Non
     assert catalog.resolve("gemini").api_key == "stored-secret"
 
 
+def test_catalog_treats_provider_default_as_a_configured_model(tmp_path: Path) -> None:
+    path = tmp_path / "models.toml"
+    path.write_text(
+        """
+default_provider = "glm"
+
+[providers.glm]
+api_key_env = "GLM_API_KEY"
+default_model = "glm-default"
+models = ["glm-older"]
+""".strip()
+        + "\n",
+        encoding="utf-8",
+    )
+
+    catalog = ModelCatalog(path=path, environ={"GLM_API_KEY": "secret"})
+
+    assert catalog.resolve("glm").model == "glm-default"
+    assert catalog.config.providers["glm"].models == ["glm-default", "glm-older"]
+
+
 def test_model_selection_store_persists_only_provider_and_model(tmp_path: Path) -> None:
     store = ModelSelectionStore(data_dir=tmp_path)
 

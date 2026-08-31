@@ -91,8 +91,11 @@ export interface ModelCatalogState {
   active?: { provider?: string; id?: string };
   providers?: Array<{
     name?: string;
+    base_url?: string | null;
     default_model?: string;
     models?: string[];
+    compatibility?: "openai" | "gemini";
+    managed?: boolean;
     active?: boolean;
   }>;
 }
@@ -106,6 +109,12 @@ export interface SkillsState {
   items?: Array<Record<string, unknown>>;
   active?: string[];
   diagnostics?: string[];
+  draft?: {
+    name: string;
+    description: string;
+    instructions: string;
+    generated_by: "model" | "template";
+  } | null;
 }
 
 export interface OperationApproval {
@@ -618,7 +627,23 @@ export function createAgentStore() {
         }
 
         if (event.type === "skills.updated") {
-          return { ...base, skillsState: record(event.data.skills) as SkillsState };
+          return {
+            ...base,
+            skillsState: {
+              ...(record(event.data.skills) as SkillsState),
+              draft: event.data.clear_draft === true ? null : state.skillsState?.draft ?? null,
+            },
+          };
+        }
+
+        if (event.type === "skill.drafted") {
+          return {
+            ...base,
+            skillsState: {
+              ...(state.skillsState ?? {}),
+              draft: record(event.data.draft) as NonNullable<SkillsState["draft"]>,
+            },
+          };
         }
 
         if (event.type === "context.compacted") {

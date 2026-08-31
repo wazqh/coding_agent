@@ -6,6 +6,24 @@ import type { GatewayCommand, GatewayReady, GatewayState } from "./types.js";
 const HANDSHAKE_PREFIX = "FORGE_DESKTOP_READY ";
 const TRUST_REQUIRED_PREFIX = "FORGE_DESKTOP_TRUST_REQUIRED ";
 const CAPABILITY_PATTERN = /^[A-Za-z0-9_-]{1,512}$/;
+const MAX_STARTUP_ERROR_BYTES = 4096;
+
+function readableStartupError(value: string): string | null {
+  const sanitized = value
+    .replace(/\u001b\[[0-?]*[ -/]*[@-~]/g, "")
+    .replace(/AIza[A-Za-z0-9_-]{16,}/g, "[REDACTED]")
+    .replace(/\bsk-[A-Za-z0-9_-]{8,}\b/g, "[REDACTED]")
+    .replace(
+      /\b(api[_ -]?key|token|authorization|key)(\s*[=:]\s*)([^\s,;]+)/gi,
+      "$1$2[REDACTED]",
+    );
+  const lines = sanitized
+    .split(/\r?\n/)
+    .map((line) => line.trim())
+    .filter(Boolean);
+  if (lines.length === 0) return null;
+  return lines.at(-1)?.replace(/^error:\s*/i, "").slice(0, 1000) ?? null;
+}
 
 export type ProjectTrustChoice = "once" | "always" | "ignore";
 
@@ -164,10 +182,10 @@ export class GatewayProcess {
       env: { ...process.env, ...options.environment },
     });
     this.child = child;
-    child.stderr.resume();
 
     return new Promise<GatewayReady>((resolve, reject) => {
       let buffer = "";
+      let stderrBuffer = "";
       let settled = false;
       const timeoutMs = options.timeoutMs ?? 20_000;
       const timer = setTimeout(() => {
@@ -207,12 +225,18 @@ export class GatewayProcess {
           fail(error instanceof Error ? error : new Error("Invalid desktop gateway handshake"));
         }
       });
+      child.stderr.on("data", (chunk: Buffer | string) => {
+        stderrBuffer = (stderrBuffer + chunk.toString()).slice(-MAX_STARTUP_ERROR_BYTES);
+      });
       child.once("error", fail);
       child.on("exit", (code, signal) => {
         if (!settled) {
+          const detail = readableStartupError(stderrBuffer);
           fail(
             new Error(
-              `Desktop gateway exited before startup (code ${String(code)}, signal ${String(signal)})`,
+              detail
+                ? `Desktop gateway failed: ${detail}`
+                : `Desktop gateway exited before startup (code ${String(code)}, signal ${String(signal)})`,
             ),
           );
           return;

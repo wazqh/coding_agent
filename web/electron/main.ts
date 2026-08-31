@@ -18,7 +18,7 @@ import {
 } from "./gatewayProcess.js";
 import { resolvePreloadPath } from "./preloadPath.js";
 import { buildGatewayEnvironment } from "./pythonEnvironment.js";
-import { PythonCredentialBridge } from "./pythonCredentialBridge.js";
+import { credentialNameToReference, PythonCredentialBridge } from "./pythonCredentialBridge.js";
 import { projectTrustChoice } from "./projectTrust.js";
 import type { DesktopRuntimeInfo, ProviderCredentialInput, RestartGatewayInput } from "./types.js";
 import { installWindowPolicy, isExternalHttpUrl } from "./windowPolicy.js";
@@ -102,6 +102,7 @@ async function startGateway(
   workspace: string,
   sessionId?: string,
   initialTrust?: ProjectTrustChoice,
+  probeModel = false,
 ): Promise<void> {
   if (mainWindow === null) throw new Error("Desktop window is unavailable");
   const developmentEnvironment = await configuredPythonEnvironment();
@@ -140,15 +141,20 @@ async function startGateway(
   disposeWindowPolicy = installWindowPolicy(mainWindow.webContents, ready.origin, confirmExternal);
   const query = new URLSearchParams({ desktop: "1" });
   if (sessionId) query.set("resume", sessionId);
+  if (probeModel) query.set("probe", "1");
   await mainWindow.loadURL(`${ready.origin}/?${query}#capability=${encodeURIComponent(ready.capability)}`);
 }
 
-async function restartGateway(workspace: string, sessionId?: string): Promise<void> {
+async function restartGateway(
+  workspace: string,
+  sessionId?: string,
+  probeModel = false,
+): Promise<void> {
   const resolved = path.resolve(workspace);
   const stat = await fs.stat(resolved);
   if (!stat.isDirectory()) throw new Error("Workspace must be a directory");
   await gateway.stop();
-  await startGateway(resolved, sessionId);
+  await startGateway(resolved, sessionId, undefined, probeModel);
 }
 
 function installIpc(window: BrowserWindow): void {
@@ -184,6 +190,14 @@ function installIpc(window: BrowserWindow): void {
     if (!fromWindow(event)) throw new Error("Invalid credential request");
     return credentialTransactions.rollback(credentialTransactionId(value));
   });
+  ipcMain.handle("desktop:delete-provider-credential", async (event, value: unknown) => {
+    if (!fromWindow(event) || typeof value !== "string") {
+      throw new Error("Invalid credential request");
+    }
+    const name = providerCredentialName(value);
+    await sharedCredentials.delete(credentialNameToReference(name));
+    await credentialStore.delete(name);
+  });
   ipcMain.handle("desktop:restart-gateway", async (event, value: unknown) => {
     if (!fromWindow(event) || typeof value !== "object" || value === null) {
       throw new Error("Invalid restart request");
@@ -196,7 +210,14 @@ function installIpc(window: BrowserWindow): void {
     if (input.sessionId !== undefined && !/^[0-9a-f]{24}$/.test(input.sessionId)) {
       throw new Error("Invalid session ID");
     }
-    await restartGateway(workspace?.trim() || currentWorkspace, input.sessionId);
+    if (input.probeModel !== undefined && typeof input.probeModel !== "boolean") {
+      throw new Error("Invalid model probe flag");
+    }
+    await restartGateway(
+      workspace?.trim() || currentWorkspace,
+      input.sessionId,
+      input.probeModel ?? false,
+    );
   });
   ipcMain.handle("desktop:open-external", (event, url: unknown) =>
     fromWindow(event) && typeof url === "string" ? confirmExternal(url) : false,

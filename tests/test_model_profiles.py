@@ -64,6 +64,45 @@ def test_upsert_provider_rejects_invalid_names_and_urls(tmp_path: Path) -> None:
         writer.upsert(provider="valid", base_url="file:///tmp/model", model="m")
 
 
+def test_upsert_provider_rejects_a_full_chat_completions_endpoint(tmp_path: Path) -> None:
+    writer = ModelProfileWriter(tmp_path / "models.toml")
+
+    with pytest.raises(
+        ValueError,
+        match=r"Base URL.*https://open.bigmodel.cn/api/paas/v4",
+    ):
+        writer.upsert(
+            provider="glm",
+            base_url="https://open.bigmodel.cn/api/paas/v4/chat/completions/",
+            model="glm-4.5",
+        )
+
+
+def test_delete_provider_preserves_other_profiles_and_refuses_the_last_one(
+    tmp_path: Path,
+) -> None:
+    path = tmp_path / "models.toml"
+    writer = ModelProfileWriter(path)
+    writer.upsert(
+        provider="openai",
+        base_url="https://api.openai.com/v1",
+        model="gpt-5",
+    )
+    writer.upsert(
+        provider="deepseek",
+        base_url="https://api.deepseek.com",
+        model="deepseek-chat",
+    )
+
+    writer.delete("deepseek")
+
+    value = tomllib.loads(path.read_text(encoding="utf-8"))
+    assert set(value["providers"]) == {"openai"}
+    assert value["default_provider"] == "openai"
+    with pytest.raises(ValueError, match="last provider"):
+        writer.delete("openai")
+
+
 def test_upsert_existing_provider_preserves_and_deduplicates_models(tmp_path: Path) -> None:
     path = tmp_path / "models.toml"
     path.write_text(
@@ -101,3 +140,51 @@ compatibility = "gemini"
         "gemini-3.7-flash",
         "gemini-2.5-flash",
     ]
+
+
+def test_update_model_replaces_only_the_selected_model(tmp_path: Path) -> None:
+    path = tmp_path / "models.toml"
+    path.write_text(
+        """
+default_provider = "glm"
+
+[providers.glm]
+base_url = "https://open.bigmodel.cn/api/paas/v4"
+api_key_env = "GLM_API_KEY"
+default_model = "glm-5.3-flash"
+models = ["glm-5.3-flash", "glm-5.2-flash"]
+compatibility = "openai"
+""".lstrip(),
+        encoding="utf-8",
+    )
+
+    ModelProfileWriter(path).update_model(
+        provider="glm",
+        original_model="glm-5.2-flash",
+        model="glm-5.2-air",
+        base_url="https://open.bigmodel.cn/api/paas/v4",
+        compatibility="openai",
+    )
+
+    profile = tomllib.loads(path.read_text(encoding="utf-8"))["providers"]["glm"]
+    assert profile["default_model"] == "glm-5.3-flash"
+    assert profile["models"] == ["glm-5.3-flash", "glm-5.2-air"]
+
+
+def test_delete_model_keeps_siblings_and_removes_the_provider_for_its_last_model(
+    tmp_path: Path,
+) -> None:
+    path = tmp_path / "models.toml"
+    writer = ModelProfileWriter(path)
+    writer.upsert(provider="glm", base_url="https://example.test/v1", model="glm-a")
+    writer.upsert(provider="glm", base_url="https://example.test/v1", model="glm-b")
+    writer.upsert(provider="other", base_url="https://other.test/v1", model="other-a")
+
+    assert writer.delete_model("glm", "glm-a") is False
+    profile = tomllib.loads(path.read_text(encoding="utf-8"))["providers"]["glm"]
+    assert profile["models"] == ["glm-b"]
+    assert profile["default_model"] == "glm-b"
+
+    assert writer.delete_model("glm", "glm-b") is True
+    value = tomllib.loads(path.read_text(encoding="utf-8"))
+    assert set(value["providers"]) == {"other"}

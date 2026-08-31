@@ -23,6 +23,7 @@ export type ViewEventType =
   | "model.catalog.updated"
   | "memory.updated"
   | "skills.updated"
+  | "skill.drafted"
   | "context.compacted";
 
 export interface ViewEvent {

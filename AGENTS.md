@@ -37,6 +37,11 @@
 
 - Render concise plans, tool actions, results, approvals, and recoverable errors; never expose
   hidden chain-of-thought.
+- Give every user action immediate, visible feedback through an appropriate state change, motion,
+  progress indicator, confirmation, or recoverable error. Respect reduced-motion preferences and
+  never use animation as the only carrier of meaning.
+- Prefer direct language, familiar controls, and progressive disclosure. Keep information and
+  interaction hierarchy obvious, and minimize the user's comprehension and cognitive load.
 - Keep interactive and one-shot output consistent, readable at 80 columns, and usable without
   color.
 - Keep slash commands, `$skill` completion, and `@file` completion stable unless documentation and

@@ -1,7 +1,8 @@
 # Desktop UI Refinement and Model Onboarding Implementation Plan
 
 > **Status (2026-08-30):** Implemented and integrated. Retained as an engineering record; see
-> `docs/roadmap.md` for the current remaining work.
+> `docs/roadmap.md` for the current remaining work. Its original Electron `safeStorage` credential
+> design was superseded by the shared Python/keyring design recorded on 2026-08-30.
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 

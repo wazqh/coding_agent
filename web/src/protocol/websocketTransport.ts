@@ -2,6 +2,7 @@ import type { ConnectionState, Transport, ViewEvent } from "./types";
 
 const protocolVersion = 2;
 const sessionPattern = /^[0-9a-f]{24}$/;
+const startupRetryDelaysMs = [0, 180, 420, 900] as const;
 const eventTypes = new Set([
   "snapshot",
   "turn.started",
@@ -24,6 +25,7 @@ const eventTypes = new Set([
   "model.catalog.updated",
   "memory.updated",
   "skills.updated",
+  "skill.drafted",
   "context.compacted",
 ]);
 
@@ -56,6 +58,14 @@ function isChangeSummary(value: unknown): boolean {
     value.path.length > 0 &&
     isNonNegativeInteger(value.additions) &&
     isNonNegativeInteger(value.deletions)
+  );
+}
+
+function isSkillDraft(value: unknown): boolean {
+  return (
+    isRecord(value) &&
+    hasStrings(value, ["name", "description", "instructions", "generated_by"]) &&
+    ["model", "template"].includes(String(value.generated_by))
   );
 }
 
@@ -138,6 +148,7 @@ function isEventData(type: string, data: Record<string, unknown>): boolean {
   if (type === "model.catalog.updated") return isRecord(data.catalog);
   if (type === "memory.updated") return isRecord(data.memory);
   if (type === "skills.updated") return isRecord(data.skills);
+  if (type === "skill.drafted") return isSkillDraft(data.draft);
   if (type === "context.compacted") return isRecord(data.result);
   return type === "context.updated";
 }
@@ -173,7 +184,7 @@ export class WebSocketTransport implements Transport {
     if (this.socket?.readyState === WebSocket.OPEN) return;
     if (this.connectPromise) return this.connectPromise;
     this.emitStatus("connecting");
-    const attempt = this.open();
+    const attempt = this.openWithStartupRetry();
     this.connectPromise = attempt;
     try {
       await attempt;
@@ -182,6 +193,22 @@ export class WebSocketTransport implements Transport {
       this.emitStatus("error");
       throw error;
     }
+  }
+
+  private async openWithStartupRetry(): Promise<void> {
+    let lastError: unknown = new Error("无法连接本地 Agent 运行时");
+    for (const delayMs of startupRetryDelaysMs) {
+      if (delayMs > 0) {
+        await new Promise<void>((resolve) => window.setTimeout(resolve, delayMs));
+      }
+      try {
+        await this.open();
+        return;
+      } catch (error) {
+        lastError = error;
+      }
+    }
+    throw lastError;
   }
 
   private async open(): Promise<void> {
@@ -200,12 +227,18 @@ export class WebSocketTransport implements Transport {
     const scheme = window.location.protocol === "https:" ? "wss" : "ws";
     const socket = new WebSocket(`${scheme}://${window.location.host}/ws`);
     this.socket = socket;
-    await new Promise<void>((resolve, reject) => {
-      socket.addEventListener("open", () => resolve(), { once: true });
-      socket.addEventListener("error", () => reject(new Error("无法连接本地 Agent 运行时")), {
-        once: true,
+    try {
+      await new Promise<void>((resolve, reject) => {
+        socket.addEventListener("open", () => resolve(), { once: true });
+        socket.addEventListener("error", () => reject(new Error("无法连接本地 Agent 运行时")), {
+          once: true,
+        });
       });
-    });
+    } catch (error) {
+      if (this.socket === socket) this.socket = null;
+      if (socket.readyState < WebSocket.CLOSING) socket.close();
+      throw error;
+    }
     socket.addEventListener("message", (message) => this.handleMessage(message.data));
     this.emitStatus("connected");
     socket.addEventListener("close", () => {

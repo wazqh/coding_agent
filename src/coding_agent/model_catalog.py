@@ -6,7 +6,7 @@ from collections.abc import Mapping
 from pathlib import Path
 from typing import Literal
 
-from pydantic import BaseModel, ConfigDict, Field, ValidationError
+from pydantic import BaseModel, ConfigDict, Field, ValidationError, model_validator
 
 from coding_agent.credentials import CredentialService, provider_credential_ref
 from coding_agent.safety.paths import atomic_write_text
@@ -26,6 +26,12 @@ class ProviderProfile(BaseModel):
     default_model: str = Field(min_length=1)
     models: list[str] = Field(default_factory=list)
     compatibility: Literal["openai", "gemini"] = "openai"
+
+    @model_validator(mode="after")
+    def include_default_in_explicit_model_list(self) -> ProviderProfile:
+        if self.models and self.default_model not in self.models:
+            self.models.insert(0, self.default_model)
+        return self
 
 
 class CatalogConfig(BaseModel):

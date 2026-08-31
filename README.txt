@@ -1,12 +1,11 @@
-Forge Coding Agent 是原创 Python 3.11+ 命令行编程智能体，不依赖任何 agent 框架。它提供普通终端滚动式 TUI、自研模型—工具—观察循环、计划、审批、会话恢复、上下文压缩、项目记忆、AGENTS.md 和懒加载 SKILL.md。
+Forge Coding Agent
 
-安装：python -m pip install -e .
-凭据只通过 OPENAI_API_KEY 提供；可选 OPENAI_BASE_URL、CODING_AGENT_MODEL。启动：coding-agent --cwd . 或 python -m coding_agent --cwd .。单次任务：coding-agent run "任务" --output jsonl；恢复：coding-agent resume SESSION_ID；列表：coding-agent sessions。Gemini 可通过官方 OpenAI-compatible 地址接入，工具调用的 thought signature 会随会话和压缩记录保留，但不会向用户显示隐藏思维过程。
+Git 仓库：https://github.com/wazqh/coding_agent
 
-安全机制包括工作区路径隔离、符号链接越界阻止、SHA-256 并发保护、原子写入、统一 diff、分级审批、危险命令直接拒绝、秘密环境变量剥离、超时终止进程树及输出截断。非交互审批失败返回 3。
+Forge 是个人独立实现的本地编程智能体，核心模型—工具—观察循环、上下文与会话、工具执行、审批、安全策略、Memory 和 Skills 均自行编写，不依赖 Agent 框架或服务端代码执行。支持 Python 3.11/3.12、Windows/Linux，提供保留终端滚屏的 TUI 与 Electron + React 桌面端；两者共用同一个 Python AgentController。
 
-交互模式提供带说明的 /help、可切换的 /permissions、结构化 /skills 管理，以及无需记住 ID 的 /resume 最近会话选择。Esc 可取消当前模型或工具运行；写入审批明确提供“本次允许、会话允许、拒绝”三个入口。
+TUI 运行：`python -m pip install -e .`，配置模型后执行 `python -m coding_agent --cwd .`。桌面端运行：`python -m pip install -e ".[desktop]"`，进入 `web` 目录执行 `npm ci`，PowerShell 设置 `$env:FORGE_WORKSPACE=(Resolve-Path ..).Path`，再执行 `npm run desktop:dev`。模型可在桌面“模型设置”或 TUI `/model add` 中配置；API Key 只进入系统凭据库或环境变量，不写入仓库、models.toml、会话、Memory 或前端协议。
 
-会话原始 JSONL 不因压缩而删除。压缩只在完整用户轮次边界切分并保留最近四轮；上下文状态估算完整请求及工具 schema。项目记忆默认关闭，只保存用户确认且不含秘密的经验，并按仓库隔离。技能从仓库或用户 .agents/skills 发现，激活后才读取完整说明，脚本不会自动执行。项目资源首次使用必须信任，哈希变化后重新确认。
+特色：项目化会话恢复与压缩；计划和真实工具轨迹；文件读写、命令、符号定义/引用检索；三档权限与写前 Diff 审批；越界路径、并发覆盖和高风险命令硬阻断；可恢复的变更账本、统一/并排 Diff 与冲突安全撤销；项目级验证命令与最多两轮测试失败自修复；受信任 AGENTS.md、懒加载 SKILL.md 和经确认的项目记忆。桌面端提供 `/`、`@file`、`$skill` 补全、只读文件预览、模型服务商管理和可视化任务检查器，不展示隐藏思维链或原始协议 JSON。
 
-验证：python -m pytest；python -m ruff check .；python -m mypy。CI 覆盖 Ubuntu/Windows 与 Python 3.11/3.12，不配置真实 API key。真实模型评测含 5 个隔离任务，每个重复 3 次。详细说明见 README.md，演示脚本见 docs/demo-script.md，当前状态与后续工作见 docs/roadmap.md。
+验证命令与详细设计见 README.md、docs/architecture.md、docs/roadmap.md 和 docs/demo-script.md。提交视频使用真实模型完成一次读代码—修改—审批—验证—Diff 审查闭环，时长不超过 2 分钟、MP4 不超过 200 MB，且不出现任何凭据。

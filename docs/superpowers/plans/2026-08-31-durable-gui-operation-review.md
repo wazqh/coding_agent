@@ -1,12 +1,15 @@
 # Durable GUI Operation and Review Implementation Plan
 
+> **Status (2026-08-31):** Implemented in the current delivery candidate. Retained as an engineering
+> record; fresh automated and manual release gates remain listed in `docs/roadmap.md`.
+
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
 **Goal:** Deliver a durable, compact GUI operation timeline, restart-safe change review, richer inspector, and bounded verification workflow.
 
 **Architecture:** Thread the model tool-call ID through approval and result events, persist an append-only change ledger in session JSONL, and let the presenter project those records into normalized GUI operations. Add review and verification capabilities through existing WebSocket request handlers rather than introducing another service.
 
-**Tech Stack:** Python 3.11/3.12, Pydantic, JSONL SessionStore, React 18, TypeScript, Zustand, Vitest, pytest.
+**Tech Stack:** Python 3.11/3.12, Pydantic, JSONL SessionStore, React 19, TypeScript, Zustand, Vitest, pytest.
 
 **Spec:** `docs/superpowers/specs/2026-08-31-durable-gui-operation-review-design.md`
 

@@ -1,12 +1,17 @@
 from __future__ import annotations
 
+from collections.abc import Iterator
 from pathlib import Path
 from types import SimpleNamespace
 
+import pytest
+
+from coding_agent.events import ModelStreamEvent
 from coding_agent.model_catalog import ModelCatalog, ModelSelectionStore
 from coding_agent.runtime_management import LifecycleState, RuntimeManagement
 from coding_agent.safety.approval import ApprovalPolicy, ApprovalRequest
 from coding_agent.session import SessionStore
+from coding_agent.skills import SkillRegistry
 from coding_agent.workspace_settings import WorkspaceSettingsStore
 
 
@@ -155,6 +160,90 @@ def test_runtime_lifecycle_is_explicit_and_sanitized(tmp_path: Path) -> None:
     assert management.snapshot().lifecycle is LifecycleState.REQUESTING
 
 
+class _SkillDraftModel:
+    def __init__(self, events: list[ModelStreamEvent]) -> None:
+        self.events = events
+        self.requests: list[tuple[list[dict[str, object]], list[dict[str, object]]]] = []
+
+    def stream(
+        self,
+        messages: list[dict[str, object]],
+        tools: list[dict[str, object]],
+    ) -> Iterator[ModelStreamEvent]:
+        self.requests.append((messages, tools))
+        yield from self.events
+
+
+def test_skill_draft_uses_the_current_model_without_exposing_tools(tmp_path: Path) -> None:
+    management, controller = _management(tmp_path)
+    controller.model = _SkillDraftModel(
+        [
+            ModelStreamEvent(
+                type="text_delta",
+                text=(
+                    '{"name":"boundary-review","description":"Review boundary behavior.",'
+                    '"instructions":"# Workflow\\n\\n1. Read the rules.\\n2. Review boundaries."}'
+                ),
+            ),
+            ModelStreamEvent(type="done"),
+        ]
+    )
+
+    draft = management.draft_skill(
+        requirement="帮我检查改动是否越过工作区边界",
+        template="review",
+    )
+
+    assert draft.name == "boundary-review"
+    assert draft.generated_by == "model"
+    assert draft.instructions.startswith("# Workflow")
+    assert controller.model.requests[0][1] == []
+    assert "帮我检查改动是否越过工作区边界" in str(controller.model.requests[0][0])
+
+
+def test_skill_draft_falls_back_to_a_reviewable_local_template(tmp_path: Path) -> None:
+    management, controller = _management(tmp_path)
+    controller.model = _SkillDraftModel(
+        [ModelStreamEvent(type="error", error="provider unavailable")]
+    )
+
+    draft = management.draft_skill(
+        requirement="每次修改文档后检查链接和标题层级",
+        template="documentation",
+    )
+
+    assert draft.generated_by == "template"
+    assert draft.name == "documentation-helper"
+    assert "每次修改文档后检查链接和标题层级" in draft.instructions
+
+
+def test_skill_creation_requires_trust_for_repo_scope_and_refreshes_catalog(
+    tmp_path: Path,
+) -> None:
+    management, controller = _management(tmp_path)
+    controller.skills = SkillRegistry(workspace=tmp_path, user_root=tmp_path / "user-skills")
+    controller.skills.discover(include_repo=True)
+
+    created = management.create_skill(
+        scope="repo",
+        name="workspace-review",
+        description="Review this workspace.",
+        instructions="# Workflow\n\nRead AGENTS.md before reviewing.",
+    )
+
+    assert [item["name"] for item in created.items] == ["workspace-review"]
+    assert (tmp_path / ".agents" / "skills" / "workspace-review" / "SKILL.md").is_file()
+
+    management.runtime.trusted_project = False
+    with pytest.raises(ValueError, match="trusted"):
+        management.create_skill(
+            scope="repo",
+            name="untrusted-write",
+            description="Must not be created.",
+            instructions="Do not write this file.",
+        )
+
+
 def test_provider_upsert_writes_only_metadata_and_selects_for_next_runtime(tmp_path: Path) -> None:
     management, controller = _management(tmp_path)
 
@@ -172,6 +261,122 @@ def test_provider_upsert_writes_only_metadata_and_selects_for_next_runtime(tmp_p
     assert "vendor/model" in catalog_text
     assert "api_key =" not in catalog_text
     assert controller.sessions.list()[0]["model"] == "vendor/model"
+
+
+def test_model_catalog_exposes_editable_metadata_without_credentials(tmp_path: Path) -> None:
+    management, _ = _management(tmp_path)
+    management.upsert_model_provider(
+        provider="open-router",
+        base_url="https://openrouter.ai/api/v1",
+        model="vendor/model",
+    )
+
+    provider = management.model_catalog().providers[0]
+
+    assert provider.name == "open-router"
+    assert provider.base_url == "https://openrouter.ai/api/v1"
+    assert provider.compatibility == "openai"
+    assert "key" not in provider.model_dump_json().casefold()
+
+
+def test_delete_model_provider_rejects_the_active_provider_and_removes_an_inactive_one(
+    tmp_path: Path,
+) -> None:
+    management, controller = _management(tmp_path)
+    management.upsert_model_provider(
+        provider="open-router",
+        base_url="https://openrouter.ai/api/v1",
+        model="vendor/model",
+    )
+    management.upsert_model_provider(
+        provider="deepseek",
+        base_url="https://api.deepseek.com",
+        model="deepseek-chat",
+    )
+    management.runtime.model_state.save(provider="open-router", model="vendor/model")
+    controller.model_manager = SimpleNamespace(provider="open-router")
+
+    with pytest.raises(ValueError, match="active provider"):
+        management.delete_model_provider("open-router")
+
+    catalog = management.delete_model_provider("deepseek")
+
+    assert [provider.name for provider in catalog.providers] == ["open-router"]
+
+
+def test_model_level_management_protects_only_the_active_model(tmp_path: Path) -> None:
+    management, controller = _management(tmp_path)
+    management.upsert_model_provider(
+        provider="glm",
+        base_url="https://open.bigmodel.cn/api/paas/v4",
+        model="glm-5.3-flash",
+    )
+    management.upsert_model_provider(
+        provider="glm",
+        base_url="https://open.bigmodel.cn/api/paas/v4",
+        model="glm-5.2-flash",
+    )
+    management.runtime.model_state.save(provider="glm", model="glm-5.3-flash")
+    controller.model_manager = SimpleNamespace(provider="glm")
+    controller.settings.model.name = "glm-5.3-flash"
+
+    with pytest.raises(ValueError, match="active model"):
+        management.delete_model("glm", "glm-5.3-flash")
+
+    catalog = management.delete_model("glm", "glm-5.2-flash")
+    assert catalog.providers[0].models == ("glm-5.3-flash",)
+
+
+def test_update_model_preserves_the_current_selection_when_editing_an_inactive_model(
+    tmp_path: Path,
+) -> None:
+    management, controller = _management(tmp_path)
+    management.upsert_model_provider(
+        provider="glm",
+        base_url="https://open.bigmodel.cn/api/paas/v4",
+        model="glm-current",
+    )
+    management.upsert_model_provider(
+        provider="glm",
+        base_url="https://open.bigmodel.cn/api/paas/v4",
+        model="glm-other",
+    )
+    management.runtime.model_state.save(provider="glm", model="glm-current")
+    controller.model_manager = SimpleNamespace(provider="glm")
+    controller.settings.model.name = "glm-current"
+
+    result = management.update_model(
+        provider="glm",
+        original_model="glm-other",
+        model="glm-renamed",
+        base_url="https://open.bigmodel.cn/api/paas/v4",
+        compatibility="openai",
+    )
+
+    assert result.active.id == "glm-current"
+    assert result.providers[0].models == ("glm-renamed", "glm-current")
+    assert management.runtime.model_state.load().model == "glm-current"
+
+
+def test_probe_model_reports_success_and_sanitizes_provider_errors(tmp_path: Path) -> None:
+    management, _ = _management(tmp_path)
+    management.runtime.model = SimpleNamespace(
+        stream=lambda _messages, _tools: iter(
+            [SimpleNamespace(type="text_delta", text="OK"), SimpleNamespace(type="done")]
+        )
+    )
+
+    assert management.probe_model().ok is True
+
+    management.runtime.model = SimpleNamespace(
+        stream=lambda _messages, _tools: iter(
+            [SimpleNamespace(type="error", error="401 invalid api key sk-secret-value")]
+        )
+    )
+    failed = management.probe_model()
+    assert failed.ok is False
+    assert failed.category == "authentication"
+    assert "sk-secret-value" not in failed.message
 
 
 def test_model_selection_records_the_active_model_in_the_current_session(tmp_path: Path) -> None:

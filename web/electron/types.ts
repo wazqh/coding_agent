@@ -29,6 +29,7 @@ export interface CredentialSaveResult {
 export interface RestartGatewayInput {
   workspace?: string;
   sessionId?: string;
+  probeModel?: boolean;
 }
 
 export interface ForgeDesktopBridge {
@@ -37,6 +38,7 @@ export interface ForgeDesktopBridge {
   saveProviderCredential(input: ProviderCredentialInput): Promise<CredentialSaveResult>;
   commitProviderCredential(transactionId: string): Promise<boolean>;
   rollbackProviderCredential(transactionId: string): Promise<boolean>;
+  deleteProviderCredential(provider: string): Promise<void>;
   restartGateway(input?: RestartGatewayInput): Promise<void>;
   openExternal(url: string): Promise<boolean>;
   minimize(): void;

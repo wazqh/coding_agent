@@ -86,6 +86,24 @@ test("validates live file change records before updating the Diff panel", () => 
   expect(parseViewEvent({ ...recorded, data: { ...recorded.data, additions: -1 } })).toBeNull();
 });
 
+test("accepts a structured skill draft and rejects malformed drafts", () => {
+  const drafted = {
+    ...valid,
+    type: "skill.drafted",
+    data: {
+      draft: {
+        name: "boundary-review",
+        description: "Review workspace boundaries.",
+        instructions: "# Workflow\n\nReview the change.",
+        generated_by: "model",
+      },
+    },
+  };
+
+  expect(parseViewEvent(drafted)).toEqual(drafted);
+  expect(parseViewEvent({ ...drafted, data: { draft: "invalid" } })).toBeNull();
+});
+
 test("batches deltas for 50ms and flushes before a non-delta event", () => {
   vi.useFakeTimers();
   const transport = new WebSocketTransport();
@@ -132,4 +150,27 @@ test("publishes connection state changes", () => {
   emitStatus("disconnected");
 
   expect(statuses).toEqual(["connecting", "connected", "disconnected"]);
+});
+
+test("retries transient startup handshake failures before publishing an error", async () => {
+  vi.useFakeTimers();
+  const transport = new WebSocketTransport();
+  const statuses: ConnectionState[] = [];
+  transport.subscribeStatus((status) => statuses.push(status));
+  const open = vi.spyOn(
+    transport as unknown as { open(): Promise<void> },
+    "open",
+  )
+    .mockRejectedValueOnce(new Error("gateway is still switching"))
+    .mockRejectedValueOnce(new Error("controller socket is closing"))
+    .mockResolvedValueOnce();
+
+  const connecting = transport.connect();
+  await vi.runAllTimersAsync();
+  await connecting;
+
+  expect(open).toHaveBeenCalledTimes(3);
+  expect(statuses).toEqual(["connecting"]);
+  expect(statuses).not.toContain("error");
+  vi.useRealTimers();
 });

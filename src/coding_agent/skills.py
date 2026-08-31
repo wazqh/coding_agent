@@ -2,9 +2,10 @@ from __future__ import annotations
 
 import hashlib
 import re
+from contextlib import suppress
 from dataclasses import dataclass, field
 from pathlib import Path, PureWindowsPath
-from typing import Any
+from typing import Any, Literal
 
 import yaml
 
@@ -171,3 +172,56 @@ class SkillRegistry:
         else:
             self._disabled.add(name)
             self.active.discard(name)
+
+    def create(
+        self,
+        *,
+        scope: Literal["user", "repo"],
+        name: str,
+        description: str,
+        instructions: str,
+    ) -> SkillMetadata:
+        """Create one reviewed SKILL.md inside an allowlisted skill root."""
+
+        normalized_name = name.strip()
+        normalized_description = description.strip()
+        normalized_instructions = instructions.strip()
+        if not VALID_NAME.fullmatch(normalized_name):
+            raise SkillError("invalid skill name")
+        if not normalized_description or len(normalized_description) > 1000:
+            raise SkillError("skill description must contain 1-1000 characters")
+        if not normalized_instructions:
+            raise SkillError("skill instructions must not be empty")
+        if normalized_name in self.skills:
+            raise SkillError(f"skill already exists: {normalized_name}")
+
+        root = self.user_root if scope == "user" else self.workspace / ".agents" / "skills"
+        root.mkdir(parents=True, exist_ok=True)
+        resolved_root = root.resolve(strict=True)
+        directory = resolved_root / normalized_name
+        if directory.exists():
+            raise SkillError(f"skill already exists: {normalized_name}")
+
+        frontmatter = yaml.safe_dump(
+            {"name": normalized_name, "description": normalized_description},
+            allow_unicode=True,
+            sort_keys=False,
+        ).strip()
+        content = f"---\n{frontmatter}\n---\n\n{normalized_instructions}\n"
+        if len(content.encode("utf-8")) > MAX_SKILL_BYTES:
+            raise SkillError("SKILL.md exceeds 64 KiB")
+
+        directory.mkdir()
+        skill_file = directory / "SKILL.md"
+        try:
+            skill_file.write_text(content, encoding="utf-8", newline="\n")
+        except (OSError, UnicodeError):
+            with suppress(OSError):
+                directory.rmdir()
+            raise
+
+        self.discover(include_repo=self.include_repo)
+        created = self.skills.get(normalized_name)
+        if created is None or created.source != scope:
+            raise SkillError("created skill was not discoverable")
+        return created

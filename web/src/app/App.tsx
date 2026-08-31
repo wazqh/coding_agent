@@ -4,7 +4,9 @@ import type { StoreApi } from "zustand";
 
 import { Composer } from "../components/Composer";
 import { CommandGuide } from "../components/CommandGuide";
+import { ConnectionTransition } from "../components/ConnectionTransition";
 import { ContextDrawer } from "../components/ContextDrawer";
+import type { ModelUpdateInput } from "../components/ModelManager";
 import { SessionRail } from "../components/SessionRail";
 import { Timeline } from "../components/Timeline";
 import { WorkspaceHeader } from "../components/WorkspaceHeader";
@@ -52,6 +54,9 @@ export function App({
   const [projectFeedback, setProjectFeedback] = useState("");
   const [modelSetupOpen, setModelSetupOpen] = useState(false);
   const [connectionError, setConnectionError] = useState("");
+  const [connectionActivity, setConnectionActivity] = useState<
+    "startup" | "model-restart" | "workspace-restart"
+  >("startup");
   const activeStore = store ?? agentStore;
   const runtimeBusy = useStore(activeStore, (state) => state.busy);
   const progress = useStore(activeStore, (state) => state.progress);
@@ -76,8 +81,12 @@ export function App({
   const conversationRef = useRef<HTMLElement>(null);
   const timelineEndRef = useRef<HTMLDivElement>(null);
   const followTimeline = useRef(true);
-  const pendingProviderRestart = useRef<string | null>(null);
+  const pendingProviderRestart = useRef<{ transactionId?: string } | null>(null);
+  const pendingProviderDelete = useRef<string | null>(null);
+  const pendingModelDelete = useRef<{ provider: string; model: string } | null>(null);
   const desktopResumeSent = useRef(false);
+  const desktopProbeSent = useRef(false);
+  const expectedGatewayRestart = useRef(false);
 
   useEffect(() => {
     if (!transport) return;
@@ -86,7 +95,17 @@ export function App({
     const unsubscribe = transport.subscribe(applyEvent);
     const unsubscribeStatus = transport.subscribeStatus((status) => {
       if (!mounted) return;
+      if (status === "disconnected" && expectedGatewayRestart.current) {
+        setConnection("connecting");
+        setConnectionError("");
+        return;
+      }
       if (status !== "connected") setConnection(status);
+      if (status === "connected") {
+        expectedGatewayRestart.current = false;
+        setConnectionActivity("startup");
+        setConnectionError("");
+      }
       if (status === "disconnected") setConnectionError("与本地 Agent 运行时的连接已断开");
     });
     void transport.connect().catch((error: unknown) => {
@@ -139,27 +158,95 @@ export function App({
 
   useEffect(() => {
     const event = events.at(-1);
-    const transactionId = pendingProviderRestart.current;
-    if (!transactionId || !event) return;
+    const pending = pendingProviderRestart.current;
+    if (!pending || !event) return;
     if (event.type === "error") {
       pendingProviderRestart.current = null;
-      void window.forgeDesktop?.rollbackProviderCredential(transactionId).finally(() => {
-        setCommandFeedback(String(event.data.message ?? "模型配置失败"));
-      });
+      const rollback = pending.transactionId
+        ? window.forgeDesktop?.rollbackProviderCredential(pending.transactionId)
+        : Promise.resolve(false);
+      void rollback?.finally(() => setCommandFeedback(String(event.data.message ?? "模型配置失败")));
       return;
     }
-    if (event.type !== "command.completed" || event.data.command !== "model.provider.upsert") return;
+    if (
+      event.type !== "command.completed"
+      || !["model.provider.upsert", "model.update"].includes(String(event.data.command))
+    ) return;
     pendingProviderRestart.current = null;
-    void window.forgeDesktop?.commitProviderCredential(transactionId).then(() =>
-      window.forgeDesktop?.restartGateway({
+    const commit = pending.transactionId
+      ? window.forgeDesktop?.commitProviderCredential(pending.transactionId)
+      : Promise.resolve(true);
+    expectedGatewayRestart.current = true;
+    setConnectionActivity("model-restart");
+    setConnection("connecting");
+    setConnectionError("");
+    void commit?.then(() => window.forgeDesktop?.restartGateway({
         workspace: effectiveWorkspacePath,
         ...(sessionId ? { sessionId } : {}),
+        probeModel: true,
       }),
     ).catch((error: unknown) => {
-      void window.forgeDesktop?.rollbackProviderCredential(transactionId);
+      expectedGatewayRestart.current = false;
+      setConnectionActivity("startup");
+      setConnection("error");
+      if (pending.transactionId) {
+        void window.forgeDesktop?.rollbackProviderCredential(pending.transactionId);
+      }
       setCommandFeedback(error instanceof Error ? error.message : "本地运行时重启失败");
     });
   }, [effectiveWorkspacePath, events, sessionId]);
+
+  useEffect(() => {
+    const event = events.at(-1);
+    const provider = pendingProviderDelete.current;
+    if (!event || !provider) return;
+    if (event.type === "error") {
+      pendingProviderDelete.current = null;
+      setCommandFeedback(String(event.data.message ?? "删除模型配置失败"));
+      return;
+    }
+    if (event.type !== "command.completed" || event.data.command !== "model.provider.delete") return;
+    pendingProviderDelete.current = null;
+    void window.forgeDesktop?.deleteProviderCredential(provider)
+      .then(() => setCommandFeedback(`已删除 ${provider} 的模型配置与安全凭据`))
+      .catch(() => setCommandFeedback(`已删除 ${provider} 的模型配置；安全凭据清理失败`));
+  }, [events]);
+
+  useEffect(() => {
+    const event = events.at(-1);
+    const pending = pendingModelDelete.current;
+    if (!event || !pending) return;
+    if (event.type === "error") {
+      pendingModelDelete.current = null;
+      setCommandFeedback(String(event.data.message ?? "删除模型失败"));
+      return;
+    }
+    if (event.type !== "command.completed" || event.data.command !== "model.delete") return;
+    pendingModelDelete.current = null;
+    if (event.data.provider_deleted === true) {
+      void window.forgeDesktop?.deleteProviderCredential(pending.provider)
+        .then(() => setCommandFeedback(`已删除 ${pending.provider} / ${pending.model} 及不再使用的安全凭据`))
+        .catch(() => setCommandFeedback(`已删除 ${pending.provider} / ${pending.model}；安全凭据清理失败`));
+      return;
+    }
+    setCommandFeedback(`已删除 ${pending.provider} / ${pending.model}`);
+  }, [events]);
+
+  useEffect(() => {
+    const event = events.at(-1);
+    if (event?.type !== "command.completed" || event.data.command !== "model.probe") return;
+    const probe = event.data.probe as { ok?: unknown; message?: unknown } | undefined;
+    setDrawerOpen(true);
+    setDrawerView("settings");
+    setModelSetupOpen(true);
+    setCommandFeedback(
+      typeof probe?.message === "string"
+        ? probe.message
+        : probe?.ok === true
+          ? "模型连接验证成功"
+          : "模型连接验证失败，请检查服务商配置",
+    );
+  }, [events]);
 
   useEffect(() => {
     if (!transport || connection !== "connected" || !runtimeConfig || desktopResumeSent.current) return;
@@ -169,6 +256,20 @@ export function App({
     transport.request("session.resume", { session_id: session });
     const url = new URL(window.location.href);
     url.searchParams.delete("resume");
+    window.history.replaceState(null, "", `${url.pathname}${url.search}`);
+  }, [connection, runtimeConfig, transport]);
+
+  useEffect(() => {
+    if (!transport || connection !== "connected" || !runtimeConfig || desktopProbeSent.current) return;
+    const query = new URLSearchParams(window.location.search);
+    if (query.get("probe") !== "1") return;
+    desktopProbeSent.current = true;
+    setDrawerOpen(true);
+    setDrawerView("settings");
+    setModelSetupOpen(true);
+    transport.request("model.probe");
+    const url = new URL(window.location.href);
+    url.searchParams.delete("probe");
     window.history.replaceState(null, "", `${url.pathname}${url.search}`);
   }, [connection, runtimeConfig, transport]);
 
@@ -240,7 +341,7 @@ export function App({
       setDrawerView("settings");
       setDrawerOpen(true);
       if (!argument) {
-        setModelSetupOpen(true);
+        setModelSetupOpen(false);
         return transport?.request("model.list") ?? false;
       }
       if (argument === "reload") return transport?.request("model.reload") ?? false;
@@ -346,7 +447,15 @@ export function App({
         }}
         onOpenProject={(projectPath, nextSessionId) => {
           if (effectiveBusy) return;
+          expectedGatewayRestart.current = true;
+          setConnectionActivity("workspace-restart");
+          setConnection("connecting");
+          setConnectionError("");
           void window.forgeDesktop?.restartGateway({ workspace: projectPath, sessionId: nextSessionId }).catch((error: unknown) => {
+            expectedGatewayRestart.current = false;
+            setConnectionActivity("startup");
+            setConnection("error");
+            setConnectionError(error instanceof Error ? error.message : "无法打开项目");
             setCommandFeedback(error instanceof Error ? error.message : "无法打开项目");
           });
         }}
@@ -364,8 +473,16 @@ export function App({
               return;
             }
             setProjectFeedback("正在打开所选项目…");
+            expectedGatewayRestart.current = true;
+            setConnectionActivity("workspace-restart");
+            setConnection("connecting");
+            setConnectionError("");
             await window.forgeDesktop?.restartGateway({ workspace: projectPath });
           }).catch((error: unknown) => {
+            expectedGatewayRestart.current = false;
+            setConnectionActivity("startup");
+            setConnection("error");
+            setConnectionError(error instanceof Error ? error.message : "无法添加项目");
             setProjectFeedback(error instanceof Error ? error.message : "无法添加项目");
           }).finally(() => {
             setAddingProject(false);
@@ -389,6 +506,19 @@ export function App({
           projectName={effectiveWorkspaceName}
           onToggleRail={() => setRailOpen((value) => !value)}
         />
+        <ConnectionTransition
+          state={connection}
+          ready={ready}
+          error={connectionError}
+          activity={connectionActivity}
+          onRetry={reconnect}
+          onOpenSettings={() => {
+            setConnectionError("");
+            setDrawerView("settings");
+            setDrawerOpen(true);
+            setModelSetupOpen(true);
+          }}
+        />
         <main
           className="conversation"
           aria-label="Agent 会话"
@@ -399,12 +529,6 @@ export function App({
             followTimeline.current = node.scrollHeight - node.scrollTop - node.clientHeight < 120;
           }}
         >
-          {connectionError ? (
-            <div className="connection-error">
-              <span>{connectionError}</span>
-              <button type="button" onClick={reconnect}>重新连接</button>
-            </div>
-          ) : null}
           {helpOpen ? (
             <CommandGuide
               commands={completion?.text === "/" ? completion.items : []}
@@ -427,7 +551,7 @@ export function App({
               <span className="empty-kicker">Local coding agent</span>
               <h1>今天想做点什么？</h1>
               <p>
-                描述您想完成的修改。Agent 会读取项目、提出计划、请求必要审批，并用真实验证结果完成闭环。
+                描述您想完成的修改。Agent 会读取项目、提出计划，并在必要时请求您的审批。
               </p>
               <div className="capability-row" aria-label="核心能力">
                 <span>理解项目</span>
@@ -457,6 +581,7 @@ export function App({
           onOpenModel={() => {
             setDrawerView("settings");
             setDrawerOpen(true);
+            setModelSetupOpen(false);
             transport?.request("model.list");
           }}
           onOpenPermissions={() => {
@@ -490,9 +615,6 @@ export function App({
           onPreview={(path) => {
             transport?.request("file.preview", { path });
           }}
-          onUndoChange={(changeId) => {
-            transport?.request("change.undo", { change_id: changeId });
-          }}
           onReviewChange={(changeId, decision) => {
             transport?.request("change.review", { change_id: changeId, decision });
           }}
@@ -517,10 +639,12 @@ export function App({
           onModelReload={() => transport?.request("model.reload")}
           onModelProviderConfigure={async (input) => {
             if (!window.forgeDesktop) throw new Error("添加服务商仅在桌面应用中可用");
-            const saved = await window.forgeDesktop.saveProviderCredential({
-              provider: input.provider,
-              apiKey: input.apiKey,
-            });
+            const saved = input.preserveCredential
+              ? null
+              : await window.forgeDesktop.saveProviderCredential({
+                  provider: input.provider,
+                  apiKey: input.apiKey,
+                });
             const accepted = transport?.request("model.provider.upsert", {
               provider: input.provider,
               base_url: input.baseUrl,
@@ -528,11 +652,37 @@ export function App({
               compatibility: input.compatibility,
             });
             if (!accepted) {
-              await window.forgeDesktop.rollbackProviderCredential(saved.transactionId);
+              if (saved) await window.forgeDesktop.rollbackProviderCredential(saved.transactionId);
               throw new Error("本地运行时未连接，模型元数据尚未保存");
             }
-            pendingProviderRestart.current = saved.transactionId;
-            return saved;
+            pendingProviderRestart.current = saved
+              ? { transactionId: saved.transactionId }
+              : {};
+            return saved ?? { persisted: true, backend: "existing" };
+          }}
+          onModelProviderDelete={(provider) => {
+            const accepted = transport?.request("model.provider.delete", { provider, confirm: true });
+            if (!accepted) {
+              setCommandFeedback("本地运行时未连接，模型配置尚未删除");
+              return;
+            }
+            pendingProviderDelete.current = provider;
+          }}
+          onModelUpdate={(input: ModelUpdateInput) => {
+            const accepted = transport?.request("model.update", {
+              provider: input.provider,
+              original_model: input.originalModel,
+              model: input.model,
+              base_url: input.baseUrl,
+              compatibility: input.compatibility,
+            });
+            if (!accepted) throw new Error("本地运行时未连接，模型修改尚未保存");
+            pendingProviderRestart.current = {};
+          }}
+          onModelDelete={(provider, model) => {
+            const accepted = transport?.request("model.delete", { provider, model, confirm: true });
+            if (!accepted) throw new Error("本地运行时未连接，模型尚未删除");
+            pendingModelDelete.current = { provider, model };
           }}
           onPermissionChange={(mode) => transport?.request("permissions.set", { mode })}
           onStepsChange={(value) => transport?.request("steps.set", { value }) ?? false}
@@ -548,6 +698,10 @@ export function App({
           onSkillsList={() => transport?.request("skills.list")}
           onSkillToggle={(name, enabled) => transport?.request("skills.toggle", { name, enabled })}
           onSkillsReload={() => transport?.request("skills.reload")}
+          onSkillDraft={(requirement, template) =>
+            transport?.request("skills.draft", { requirement, template }) ?? false
+          }
+          onSkillCreate={(input) => transport?.request("skills.create", input) ?? false}
           onCompact={() => transport?.request("context.compact")}
           onClose={() => {
             setDrawerOpen(false);
