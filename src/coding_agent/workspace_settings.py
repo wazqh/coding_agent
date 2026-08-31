@@ -3,7 +3,7 @@ from __future__ import annotations
 import json
 from pathlib import Path
 
-from pydantic import BaseModel, ConfigDict, Field, ValidationError
+from pydantic import BaseModel, ConfigDict, Field, ValidationError, field_validator
 
 from coding_agent.project import project_id
 from coding_agent.safety.paths import atomic_write_text
@@ -13,9 +13,29 @@ class WorkspaceSettingsError(ValueError):
     pass
 
 
+class VerificationSettings(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    commands: list[str] = Field(default_factory=list, max_length=8)
+
+    @field_validator("commands")
+    @classmethod
+    def validate_commands(cls, commands: list[str]) -> list[str]:
+        normalized: list[str] = []
+        for command in commands:
+            value = command.strip()
+            if not value or len(value) > 20_000 or "\n" in value or "\r" in value:
+                raise ValueError(
+                    "verification commands must be non-empty single-line values "
+                    "of at most 20000 characters"
+                )
+            normalized.append(value)
+        return normalized
+
+
 class WorkspaceSettings(BaseModel):
     model_config = ConfigDict(extra="forbid")
     max_steps: int | None = Field(default=None, ge=12, le=100)
+    verification: VerificationSettings = Field(default_factory=VerificationSettings)
 
 
 class WorkspaceSettingsStore:
@@ -46,4 +66,18 @@ class WorkspaceSettingsStore:
     def reset_max_steps(self) -> None:
         settings = self.load()
         settings.max_steps = None
+        self._save(settings)
+
+    def set_verification_commands(self, commands: list[str]) -> None:
+        try:
+            verification = VerificationSettings(commands=commands)
+        except ValidationError as exc:
+            raise WorkspaceSettingsError(f"invalid verification configuration: {exc}") from exc
+        settings = self.load()
+        settings.verification = verification
+        self._save(settings)
+
+    def reset_verification_commands(self) -> None:
+        settings = self.load()
+        settings.verification = VerificationSettings()
         self._save(settings)

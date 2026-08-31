@@ -120,6 +120,36 @@ def test_presenter_separates_command_validation_from_routine_activity() -> None:
     assert result.data["summary"] == "24 passed"
 
 
+def test_presenter_marks_configured_verification_commands_as_validation() -> None:
+    presenter = AgentEventPresenter()
+    call = presenter.present(
+        _event(
+            EventKind.TOOL_CALL,
+            {
+                "id": "verification-1",
+                "name": "run_command",
+                "arguments": {"command": "scripts/check-project.ps1"},
+                "verification": True,
+            },
+        )
+    )[0]
+    result = presenter.present(
+        _event(
+            EventKind.TOOL_RESULT,
+            {
+                "id": "verification-1",
+                "name": "run_command",
+                "verification": True,
+                "result": {"ok": True, "summary": "checks passed", "data": {}},
+            },
+        )
+    )[0]
+
+    assert call.data["kind"] == "validation"
+    assert call.data["title"] == "运行验证"
+    assert result.data["kind"] == "validation"
+
+
 def test_presenter_keeps_ordinary_shell_commands_as_commands() -> None:
     presenter = AgentEventPresenter()
     call = presenter.present(
@@ -147,6 +177,41 @@ def test_presenter_keeps_ordinary_shell_commands_as_commands() -> None:
     assert call.data["title"] == "运行命令"
     assert result.data["kind"] == "command"
     assert result.data["detail"]["data"]["command"] == "git check-ignore -v test/example.py"
+
+
+def test_presenter_labels_hard_blocked_commands_as_safety_events() -> None:
+    presenter = AgentEventPresenter()
+    presenter.present(
+        _event(
+            EventKind.TOOL_CALL,
+            {
+                "id": "call-blocked",
+                "name": "run_command",
+                "arguments": {"command": "git clean -fd"},
+            },
+        )
+    )
+    result = presenter.present(
+        _event(
+            EventKind.TOOL_RESULT,
+            {
+                "id": "call-blocked",
+                "name": "run_command",
+                "result": {
+                    "ok": False,
+                    "code": "DANGEROUS_COMMAND",
+                    "summary": "command matches a destructive safety rule",
+                    "data": {
+                        "hard_blocked": True,
+                        "risk_label": "强制清理 Git 工作区",
+                    },
+                },
+            },
+        )
+    )[0]
+
+    assert result.data["title"] == "已阻止高风险命令"
+    assert result.data["summary"] == "强制清理 Git 工作区"
 
 
 def test_presenter_labels_the_runtime_edit_file_tool_as_a_file_change() -> None:
@@ -205,6 +270,7 @@ def test_presenter_publishes_a_successful_file_change_immediately() -> None:
         "deletions": 0,
         "diff": "--- a/src/new.py\n+++ b/src/new.py\n@@ -0,0 +1 @@\n+print('new')\n",
         "reversible": True,
+        "review_status": "pending",
     }
 
 

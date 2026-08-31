@@ -5,8 +5,9 @@ from contextlib import suppress
 from pathlib import Path
 from queue import Empty, Queue
 from threading import Event, Lock, Thread
-from typing import Protocol, cast
+from typing import Literal, Protocol, cast
 
+from coding_agent.change_ledger import CHANGE_REVIEW_TYPE, review_record
 from coding_agent.controller import RunResult
 from coding_agent.events import AgentEvent, EventKind
 from coding_agent.memory import MemoryStore
@@ -72,8 +73,8 @@ class TurnCoordinator:
         self._thread: Thread | None = None
         self._cancel_event: Event | None = None
         self._approval_broker: ApprovalBroker | None = None
-        self._next_approval_context: tuple[str, str | None] | None = None
-        self._approval_contexts: dict[str, tuple[str, str | None]] = {}
+        self._next_approval_context: tuple[str, str | None, str | None] | None = None
+        self._approval_contexts: dict[str, tuple[str, str | None, str | None]] = {}
         self._runtime_metadata: dict[str, object] = {}
         self._management: RuntimeManagement | None = None
         self._workspace: Path | None = None
@@ -140,6 +141,7 @@ class TurnCoordinator:
         """Attach bounded workspace/session projections used by the graphical frontend."""
 
         resolved = workspace.resolve(strict=True)
+        sessions.set_workspace_hidden(resolved, False)
         with self._lock:
             self._workspace = resolved
             self._sessions = sessions
@@ -189,6 +191,9 @@ class TurnCoordinator:
 
     def reset_steps(self) -> RuntimeSnapshot:
         return self._require_idle_management().reset_steps()
+
+    def set_verification_commands(self, commands: list[str]) -> RuntimeSnapshot:
+        return self._require_idle_management().set_verification_commands(commands)
 
     def plan_snapshot(self) -> tuple[object, ...]:
         return tuple(self._require_management().snapshot().plan)
@@ -297,7 +302,7 @@ class TurnCoordinator:
             if not candidates:
                 return None
             selected = next(
-                (item for item in candidates if str(item.get("title", "")).strip()),
+                (item for item in candidates if item.get("has_user_message") is True),
                 candidates[0],
             )
             session_id = str(selected["id"])
@@ -448,12 +453,16 @@ class TurnCoordinator:
             with self._lock:
                 context = self._approval_contexts.pop(approval_id, None)
             if context is not None:
-                session_id, turn_id = context
+                session_id, turn_id, operation_id = context
                 self._publish(
                     session_id=session_id,
                     turn_id=turn_id,
                     kind=ViewEventType.APPROVAL_RESOLVED,
-                    data={"approval_id": approval_id, "decision": "cancelled"},
+                    data={
+                        "approval_id": approval_id,
+                        "operation_id": operation_id,
+                        "decision": "cancelled",
+                    },
                 )
         return True
 
@@ -481,7 +490,12 @@ class TurnCoordinator:
         if event.kind is EventKind.APPROVAL:
             if "request" in event.data:
                 with self._lock:
-                    self._next_approval_context = (event.session_id, event.turn_id)
+                    operation_id = event.data.get("operation_id")
+                    self._next_approval_context = (
+                        event.session_id,
+                        event.turn_id,
+                        operation_id if isinstance(operation_id, str) else None,
+                    )
             return
         with self._event_lock:
             for presented in self._presenter.present(event):
@@ -494,18 +508,19 @@ class TurnCoordinator:
             session_id = self.session_id
             if session_id is None:
                 raise CoordinatorError("approval has no active session")
-            context = (session_id, None)
+            context = (session_id, None, None)
         with self._lock:
             self._approval_contexts[approval_id] = context
             if self._next_approval_context == context:
                 self._next_approval_context = None
-        session_id, turn_id = context
+        session_id, turn_id, operation_id = context
         self._publish(
             session_id=session_id,
             turn_id=turn_id,
             kind=ViewEventType.APPROVAL_REQUESTED,
             data={
                 "approval_id": approval_id,
+                "operation_id": operation_id,
                 "request": request.model_dump(mode="json"),
             },
         )
@@ -518,12 +533,16 @@ class TurnCoordinator:
         with self._lock:
             context = self._approval_contexts.pop(approval_id, None)
         if context is not None:
-            session_id, turn_id = context
+            session_id, turn_id, operation_id = context
             self._publish(
                 session_id=session_id,
                 turn_id=turn_id,
                 kind=ViewEventType.APPROVAL_RESOLVED,
-                data={"approval_id": approval_id, "decision": decision.value},
+                data={
+                    "approval_id": approval_id,
+                    "operation_id": operation_id,
+                    "decision": decision.value,
+                },
             )
         return True
 
@@ -578,6 +597,7 @@ class TurnCoordinator:
                         diff=change.diff,
                     ),
                     "reversible": change.reversible,
+                    "review_status": change.review_status,
                 }
                 for change in recorded
             ]
@@ -606,12 +626,88 @@ class TurnCoordinator:
             WorkspacePaths(workspace),
             change_id,
         )
+        self._append_change_review(change.id, "reverted")
         return summarize_diff(
             change_id=change.id,
             path=change.path,
             kind=change.kind,
             diff=change.diff,
         )
+
+    def review_change(
+        self,
+        change_id: str,
+        decision: Literal["accept", "discard"],
+    ) -> dict[str, object]:
+        """Accept one visible change or safely discard its exact recorded Diff."""
+
+        with self._lock:
+            if self._thread is not None:
+                raise CoordinatorBusyError("cannot review changes while a turn is running")
+            controller = self._controller
+            workspace = self._workspace
+        if controller is None or workspace is None:
+            raise CoordinatorError("change history is unavailable")
+        change = next(
+            (item for item in controller.working.changes if item.id == change_id),
+            None,
+        )
+        if change is None:
+            raise CoordinatorError("this Diff is no longer available")
+        if decision == "accept":
+            change.review_status = "accepted"
+            self._append_change_review(change.id, "accepted")
+            return {"id": change.id, "path": change.path, "status": "accepted"}
+        undone = undo_file_change(
+            cast(WorkingState, controller.working),
+            WorkspacePaths(workspace),
+            change_id,
+        )
+        self._append_change_review(undone.id, "reverted")
+        return {"id": undone.id, "path": undone.path, "status": "reverted"}
+
+    def review_all_changes(
+        self,
+        decision: Literal["accept", "discard"],
+    ) -> dict[str, object]:
+        """Review pending changes, reverting newest first and stopping on conflict."""
+
+        with self._lock:
+            controller = self._controller
+        if controller is None:
+            raise CoordinatorError("change history is unavailable")
+        pending = [
+            change for change in controller.working.changes if change.review_status == "pending"
+        ]
+        ordered = pending if decision == "accept" else list(reversed(pending))
+        processed = 0
+        conflict: str | None = None
+        for change in ordered:
+            try:
+                self.review_change(change.id, decision)
+            except (CoordinatorError, OSError, ValueError) as exc:
+                change.review_status = "conflicted"
+                self._append_change_review(change.id, "conflicted")
+                conflict = str(exc)
+                break
+            processed += 1
+        remaining = sum(item.review_status == "pending" for item in controller.working.changes)
+        return {"processed": processed, "remaining": remaining, "conflict": conflict}
+
+    def _append_change_review(
+        self,
+        change_id: str,
+        status: Literal["accepted", "conflicted", "reverted"],
+    ) -> None:
+        with self._lock:
+            sessions = self._sessions
+            session_id = self._controller.session_id if self._controller is not None else None
+        if sessions is not None and session_id is not None:
+            sessions.append(
+                session_id,
+                CHANGE_REVIEW_TYPE,
+                review_record(change_id, status),
+            )
 
     @staticmethod
     def _workspace_sessions(sessions: SessionStore, workspace: Path) -> list[dict[str, object]]:
@@ -634,6 +730,7 @@ class TurnCoordinator:
         current_workspace: Path,
     ) -> list[dict[str, object]]:
         current = current_workspace.resolve()
+        hidden = sessions.hidden_workspaces()
         grouped: dict[Path, list[dict[str, object]]] = {}
         for item in sessions.list():
             raw_workspace = item.get("workspace")
@@ -642,6 +739,8 @@ class TurnCoordinator:
             try:
                 workspace = Path(str(raw_workspace)).resolve()
             except (OSError, ValueError):
+                continue
+            if str(workspace) in hidden and workspace != current:
                 continue
             grouped.setdefault(workspace, []).append(item)
         ordered = sorted(
@@ -657,6 +756,36 @@ class TurnCoordinator:
             }
             for workspace, project_sessions in ordered
         ]
+
+    def remove_project(self, workspace_path: str) -> list[dict[str, object]]:
+        """Hide a recent project without deleting its workspace or durable data."""
+
+        with self._lock:
+            if self._thread is not None:
+                raise CoordinatorBusyError("cannot remove a project while a turn is running")
+            sessions = self._sessions
+            current = self._workspace
+        if sessions is None or current is None:
+            raise CoordinatorError("project history is unavailable")
+        try:
+            target = Path(workspace_path).resolve()
+        except (OSError, ValueError) as exc:
+            raise CoordinatorError("invalid project path") from exc
+        if target == current.resolve():
+            raise CoordinatorError("cannot remove the active project")
+        known: set[Path] = set()
+        for item in sessions.list():
+            raw_workspace = item.get("workspace")
+            if not raw_workspace:
+                continue
+            try:
+                known.add(Path(str(raw_workspace)).resolve())
+            except (OSError, ValueError):
+                continue
+        if target not in known:
+            raise CoordinatorError("project is not in the recent list")
+        sessions.set_workspace_hidden(target, True)
+        return self._project_sessions(sessions, current)
 
     def snapshot(self) -> dict[str, object]:
         with self._lock:

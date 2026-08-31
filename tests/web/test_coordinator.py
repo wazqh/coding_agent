@@ -290,7 +290,10 @@ def test_coordinator_attaches_opaque_id_to_approval_round_trip() -> None:
             session_id=SESSION_ID,
             turn_id="turn-approval",
             state=AgentState.AWAITING_APPROVAL,
-            data={"request": request.model_dump(mode="json")},
+            data={
+                "operation_id": "command-operation",
+                "request": request.model_dump(mode="json"),
+            },
         )
     )
     result: Queue[ApprovalDecision] = Queue()
@@ -303,13 +306,18 @@ def test_coordinator_attaches_opaque_id_to_approval_round_trip() -> None:
     assert isinstance(approval_id, str)
     assert requested.type is ViewEventType.APPROVAL_REQUESTED
     assert requested.turn_id == "turn-approval"
+    assert requested.data["operation_id"] == "command-operation"
 
     assert coordinator.resolve_approval(approval_id, ApprovalDecision.ALLOW_ONCE)
     worker.join(timeout=1)
     resolved = coordinator.next_event(timeout=1)
     assert resolved is not None
     assert resolved.type is ViewEventType.APPROVAL_RESOLVED
-    assert resolved.data == {"approval_id": approval_id, "decision": "allow_once"}
+    assert resolved.data == {
+        "approval_id": approval_id,
+        "operation_id": "command-operation",
+        "decision": "allow_once",
+    }
     assert result.get_nowait() is ApprovalDecision.ALLOW_ONCE
 
 
@@ -759,3 +767,102 @@ def test_coordinator_undoes_the_exact_recorded_diff_and_updates_the_change_list(
     assert undone["path"] == "new.py"
     assert coordinator.list_changes() == []
     assert not (tmp_path / "new.py").exists()
+
+
+def test_coordinator_accepts_a_change_without_touching_the_workspace(tmp_path: Path) -> None:
+    coordinator = TurnCoordinator()
+    runtime = FakeRuntime(coordinator.handle_agent_event)
+    coordinator.attach_runtime(runtime)
+    sessions = SessionStore(tmp_path / "data")
+    coordinator.configure_workspace_services(workspace=tmp_path, sessions=sessions)
+    coordinator.new_session()
+    controller = runtime.controllers[-1]
+    working = WorkingState()
+    controller.working = working
+    ctx = ToolContext(
+        workspace=WorkspacePaths(tmp_path),
+        approval=ApprovalPolicy("auto"),
+        session_id=controller.session_id,
+        turn_id="turn-review",
+        working=working,
+    )
+    written = default_registry().execute(
+        "write_file", {"path": "new.py", "content": "print('new')\n"}, ctx
+    )
+
+    result = coordinator.review_change(str(written.data["change_id"]), "accept")
+
+    assert result["status"] == "accepted"
+    assert (tmp_path / "new.py").is_file()
+    assert coordinator.list_changes()[0]["review_status"] == "accepted"
+    assert sessions.replay(controller.session_id)[-1]["type"] == "change_review"
+
+
+def test_coordinator_discards_all_changes_in_reverse_order(tmp_path: Path) -> None:
+    coordinator = TurnCoordinator()
+    runtime = FakeRuntime(coordinator.handle_agent_event)
+    coordinator.attach_runtime(runtime)
+    coordinator.configure_workspace_services(
+        workspace=tmp_path, sessions=SessionStore(tmp_path / "data")
+    )
+    coordinator.new_session()
+    controller = runtime.controllers[-1]
+    working = WorkingState()
+    controller.working = working
+    ctx = ToolContext(
+        workspace=WorkspacePaths(tmp_path),
+        approval=ApprovalPolicy("auto"),
+        session_id=controller.session_id,
+        turn_id="turn-review-all",
+        working=working,
+    )
+    first = default_registry().execute("write_file", {"path": "new.py", "content": "first\n"}, ctx)
+    second = default_registry().execute(
+        "write_file",
+        {
+            "path": "new.py",
+            "content": "second\n",
+            "expected_sha256": first.data["sha256"],
+        },
+        ctx,
+    )
+    assert second.ok
+
+    result = coordinator.review_all_changes("discard")
+
+    assert result == {"processed": 2, "remaining": 0, "conflict": None}
+    assert coordinator.list_changes() == []
+    assert not (tmp_path / "new.py").exists()
+
+
+def test_removing_a_project_hides_only_its_recent_entry(tmp_path: Path) -> None:
+    current = tmp_path / "current"
+    other = tmp_path / "other"
+    current.mkdir()
+    other.mkdir()
+    sessions = SessionStore(tmp_path / "data")
+    sessions.create({"workspace": str(current)})
+    other_session = sessions.create({"workspace": str(other)})
+    other_memory = MemoryStore(data_dir=tmp_path / "data", workspace=other, enabled=True)
+    other_memory.remember(content="keep project memory", session_id=other_session)
+    coordinator = TurnCoordinator()
+    coordinator.configure_workspace_services(workspace=current, sessions=sessions)
+
+    projects = coordinator.remove_project(str(other))
+
+    assert [item["path"] for item in projects] == [str(current.resolve())]
+    assert other.is_dir()
+    assert len(sessions.list()) == 2
+    assert [item.content for item in other_memory.list()] == ["keep project memory"]
+
+
+def test_removing_the_active_project_is_rejected(tmp_path: Path) -> None:
+    sessions = SessionStore(tmp_path / "data")
+    sessions.create({"workspace": str(tmp_path)})
+    coordinator = TurnCoordinator()
+    coordinator.configure_workspace_services(workspace=tmp_path, sessions=sessions)
+
+    with pytest.raises(CoordinatorError, match="active project"):
+        coordinator.remove_project(str(tmp_path))
+
+    assert sessions.hidden_workspaces() == set()

@@ -38,6 +38,58 @@ function unwrap(detail: unknown): unknown {
   return "raw" in value ? value.raw : detail;
 }
 
+function stringValue(value: unknown, fallback = ""): string {
+  return typeof value === "string" && value.trim() ? value : fallback;
+}
+
+function HighlightedCommand({ command, matchedText }: { command: string; matchedText: string }) {
+  const index = matchedText ? command.toLocaleLowerCase().indexOf(matchedText.toLocaleLowerCase()) : -1;
+  if (index < 0) return <>{command}</>;
+  return (
+    <>
+      {command.slice(0, index)}
+      <mark>{command.slice(index, index + matchedText.length)}</mark>
+      {command.slice(index + matchedText.length)}
+    </>
+  );
+}
+
+function BlockedCommandDetail({ result }: { result: Record<string, unknown> }) {
+  const data = record(result.data);
+  const command = stringValue(data.command, "未提供命令文本");
+  const matchedText = stringValue(data.matched_text);
+  const riskLabel = stringValue(data.risk_label, "高风险命令");
+  const guidance = stringValue(
+    data.guidance,
+    "请让 Agent 改用范围明确、可审阅且可恢复的操作。",
+  );
+
+  return (
+    <div className="activity-friendly-detail is-safety-detail">
+      <section className="command-safety-card" aria-label="已阻止的高风险命令">
+        <header>
+          <span className="command-safety-badge">硬安全规则</span>
+          <div>
+            <strong>已阻止高风险操作</strong>
+            <p>{riskLabel}</p>
+          </div>
+        </header>
+        <div className="command-safety-group">
+          <span>尝试执行</span>
+          <pre className="safety-command"><code>
+            <HighlightedCommand command={command} matchedText={matchedText} />
+          </code></pre>
+        </div>
+        <div className="command-safety-guidance">
+          <strong>建议的安全做法</strong>
+          <p>{guidance}</p>
+        </div>
+        <small>命令已在执行前停止，未对工作区产生改动。</small>
+      </section>
+    </div>
+  );
+}
+
 function labelFor(key: string): string {
   return labels[key] ?? key.replaceAll("_", " ");
 }
@@ -86,19 +138,12 @@ export function StructuredToolDetail({ detail, activityKind }: StructuredToolDet
   const data = record(result.data);
   const blocked = result.code === "DANGEROUS_COMMAND" || data.hard_blocked === true;
 
+  if (blocked) return <BlockedCommandDetail result={result} />;
+
   return (
     <div className="activity-friendly-detail">
-      {blocked ? (
-        <div className="command-safety-note" role="note">
-          <strong>安全策略已阻止</strong>
-          <p>
-            该命令命中不可恢复或可能越出工作区的硬性规则，不能在图形界面中覆盖。
-            请让 Agent 改用范围明确、可审阅且可恢复的操作。
-          </p>
-        </div>
-      ) : null}
       <StructuredFields value={value} />
-      {activityKind === "command" && !blocked && result.code ? (
+      {activityKind === "command" && result.code ? (
         <small className="activity-result-code">命令详情</small>
       ) : null}
     </div>

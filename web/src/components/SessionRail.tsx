@@ -20,6 +20,7 @@ interface SessionRailProps {
   onDeleteSession?: (sessionId: string) => void;
   onOpenProject?: (projectPath: string, sessionId?: string) => void;
   onAddProject?: () => void;
+  onRemoveProject?: (projectPath: string) => void;
 }
 
 export function SessionRail({
@@ -39,6 +40,7 @@ export function SessionRail({
   onDeleteSession = () => undefined,
   onOpenProject = () => undefined,
   onAddProject = () => undefined,
+  onRemoveProject = () => undefined,
 }: SessionRailProps) {
   const fallbackProjects: ProjectSummary[] = projects.length
     ? projects
@@ -46,6 +48,7 @@ export function SessionRail({
   const [query, setQuery] = useState("");
   const [menuSessionId, setMenuSessionId] = useState<string | null>(null);
   const [confirmSessionId, setConfirmSessionId] = useState<string | null>(null);
+  const [confirmProjectPath, setConfirmProjectPath] = useState<string | null>(null);
   const [expandedProjects, setExpandedProjects] = useState<Set<string>>(
     () => new Set(fallbackProjects.filter((project) => project.current).map((project) => project.path)),
   );
@@ -165,7 +168,29 @@ export function SessionRail({
                     <FolderIcon />
                     <strong>{project.name}</strong>
                   </button>
+                  {!project.current ? (
+                    <button
+                      type="button"
+                      className="project-more"
+                      disabled={busy}
+                      aria-label={`移除项目 ${project.name}`}
+                      onClick={() => setConfirmProjectPath(project.path)}
+                    >
+                      ···
+                    </button>
+                  ) : null}
                 </div>
+                {confirmProjectPath === project.path ? (
+                  <div className="project-remove-confirm" role="alertdialog" aria-label={`移除项目${project.name}`}>
+                    <strong>从 Forge 中移除“{project.name}”？</strong>
+                    <p className="mono-label">{project.path}</p>
+                    <small>不会删除工作目录、Git 文件、会话或 Memory。</small>
+                    <div>
+                      <button type="button" onClick={() => setConfirmProjectPath(null)}>取消</button>
+                      <button type="button" className="is-danger" onClick={() => { setConfirmProjectPath(null); onRemoveProject(project.path); }}>移除</button>
+                    </div>
+                  </div>
+                ) : null}
                 {expanded ? (
                   <div role="group" className="project-sessions">
                     {project.sessions.map((session) => {

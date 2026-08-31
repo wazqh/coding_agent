@@ -57,9 +57,11 @@ class RuntimeFactory:
             data_dir=data_dir,
             workspace=resolved_workspace,
         )
-        max_steps_override = workspace_settings.load().max_steps
+        workspace_overrides = workspace_settings.load()
+        max_steps_override = workspace_overrides.max_steps
         if max_steps_override is not None:
             self.settings.agent.max_steps = max_steps_override
+        self.verification_commands = tuple(workspace_overrides.verification.commands)
 
         self.credentials = credentials or KeyringCredentialService()
         self.catalog = ModelCatalog(
@@ -146,6 +148,7 @@ class RuntimeFactory:
             session_id=session_id,
             event_sink=self.event_sink,
             model_manager=self.model_manager,
+            verification_commands=self.verification_commands,
         )
 
     def controller_factory(self) -> ControllerFactory:

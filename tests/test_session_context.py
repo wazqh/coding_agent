@@ -5,7 +5,7 @@ from pathlib import Path
 import pytest
 
 from coding_agent.context import ContextManager, estimate_request_tokens, estimate_tokens
-from coding_agent.session import SessionError, SessionStore
+from coding_agent.session import SessionError, SessionStore, concise_session_title
 from coding_agent.tools.base import WorkingState
 
 
@@ -26,6 +26,38 @@ def test_session_round_trip_listing_and_corruption(tmp_path: Path) -> None:
         stream.write("not-json\n")
     with pytest.raises(SessionError, match="corrupt"):
         store.replay(session_id)
+
+
+@pytest.mark.parametrize(
+    ("task", "expected"),
+    [
+        ("请帮我 修复登录页的 token 刷新问题，然后运行测试", "修复登录页的 token 刷新问题"),
+        ("麻烦优化一下中文会话标题。后面还有说明", "优化一下中文会话标题"),
+        ("   ", "未命名任务"),
+        (
+            "实现一个非常非常非常非常非常非常长的项目标题用于测试",
+            "实现一个非常非常非常非常非常非常长的项目标题用…",
+        ),
+    ],
+)
+def test_concise_session_title_normalizes_task_text(task: str, expected: str) -> None:
+    assert concise_session_title(task) == expected
+
+
+def test_persisted_session_title_takes_precedence_over_legacy_first_message(
+    tmp_path: Path,
+) -> None:
+    store = SessionStore(tmp_path / "data")
+    session_id = store.create({"workspace": str(tmp_path)})
+    store.append_message(session_id, {"role": "user", "content": "请帮我处理旧标题"})
+
+    title = store.ensure_title(session_id, "请帮我改造会话组织，然后运行测试")
+    repeated = store.ensure_title(session_id, "另一个标题不应覆盖")
+
+    assert title == "改造会话组织"
+    assert repeated == title
+    assert store.list()[0]["title"] == title
+    assert sum(record["type"] == "session_title" for record in store.replay(session_id)) == 1
 
 
 def test_context_compaction_preserves_recent_and_summary() -> None:

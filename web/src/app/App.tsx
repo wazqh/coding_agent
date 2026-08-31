@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useRef, useState, type CSSProperties } from "react";
 import { useStore } from "zustand";
 import type { StoreApi } from "zustand";
 
@@ -36,9 +36,15 @@ export function App({
   desktop = false,
 }: AppProps) {
   const [drawerOpen, setDrawerOpen] = useState(false);
+  const [drawerWidth, setDrawerWidth] = useState(() => {
+    const stored = Number(window.localStorage.getItem("forge.inspector.width"));
+    return Number.isFinite(stored) && stored >= 360 && stored <= 900 ? stored : 438;
+  });
   const [railOpen, setRailOpen] = useState(false);
   const [railCollapsed, setRailCollapsed] = useState(false);
-  const [drawerView, setDrawerView] = useState<"changes" | "run" | "resources" | "context">("changes");
+  const [drawerView, setDrawerView] = useState<
+    "changes" | "run" | "settings" | "resources" | "context"
+  >("changes");
   const [helpOpen, setHelpOpen] = useState(false);
   const [showRaw, setShowRaw] = useState(false);
   const [commandFeedback, setCommandFeedback] = useState("");
@@ -209,7 +215,7 @@ export function App({
       return true;
     }
     if (command === "/steps") {
-      setDrawerView("run");
+      setDrawerView("settings");
       setDrawerOpen(true);
       if (!argument) return transport?.request("steps.get") ?? false;
       if (argument === "reset") return transport?.request("steps.reset") ?? false;
@@ -221,7 +227,7 @@ export function App({
       return transport?.request("steps.set", { value: valueNumber }) ?? false;
     }
     if (command === "/permissions") {
-      setDrawerView("run");
+      setDrawerView("settings");
       setDrawerOpen(true);
       if (!argument) return transport?.request("permissions.get") ?? false;
       if (!["prompt", "auto", "read-only"].includes(argument)) {
@@ -231,7 +237,7 @@ export function App({
       return transport?.request("permissions.set", { mode: argument }) ?? false;
     }
     if (command === "/model") {
-      setDrawerView("run");
+      setDrawerView("settings");
       setDrawerOpen(true);
       if (!argument) {
         setModelSetupOpen(true);
@@ -311,7 +317,10 @@ export function App({
       {desktop ? (
         <div className="desktop-titlebar" aria-hidden="true" />
       ) : null}
-      <div className={`app-shell${drawerOpen ? " has-drawer" : ""}${railCollapsed ? " rail-collapsed" : ""}`}>
+      <div
+        className={`app-shell${drawerOpen ? " has-drawer" : ""}${railCollapsed ? " rail-collapsed" : ""}`}
+        style={{ "--inspector-width": `${drawerWidth}px` } as CSSProperties}
+      >
       <SessionRail
         productName={productName}
         workspaceName={effectiveWorkspaceName}
@@ -361,6 +370,9 @@ export function App({
           }).finally(() => {
             setAddingProject(false);
           });
+        }}
+        onRemoveProject={(projectPath) => {
+          transport?.request("project.remove", { path: projectPath });
         }}
       />
       {railOpen && (
@@ -443,12 +455,12 @@ export function App({
           completion={completion}
           onCompletionQuery={(text, cursor) => transport?.request("completion.query", { text, cursor, limit: 40 })}
           onOpenModel={() => {
-            setDrawerView("run");
+            setDrawerView("settings");
             setDrawerOpen(true);
             transport?.request("model.list");
           }}
           onOpenPermissions={() => {
-            setDrawerView("run");
+            setDrawerView("settings");
             setDrawerOpen(true);
             transport?.request("runtime.status");
           }}
@@ -467,13 +479,25 @@ export function App({
       </section>
       {drawerOpen && (
         <ContextDrawer
+          width={drawerWidth}
+          onWidthChange={(value) => {
+            setDrawerWidth(value);
+            window.localStorage.setItem("forge.inspector.width", String(value));
+          }}
           changes={changes}
+          timelineItems={timelineItems}
           filePreview={filePreview}
           onPreview={(path) => {
             transport?.request("file.preview", { path });
           }}
           onUndoChange={(changeId) => {
             transport?.request("change.undo", { change_id: changeId });
+          }}
+          onReviewChange={(changeId, decision) => {
+            transport?.request("change.review", { change_id: changeId, decision });
+          }}
+          onReviewAll={(decision) => {
+            transport?.request("changes.review", { decision });
           }}
           key={drawerView}
           initialTab={drawerView}
@@ -513,6 +537,9 @@ export function App({
           onPermissionChange={(mode) => transport?.request("permissions.set", { mode })}
           onStepsChange={(value) => transport?.request("steps.set", { value }) ?? false}
           onStepsReset={() => transport?.request("steps.reset") ?? false}
+          onVerificationChange={(commands) =>
+            transport?.request("verification.set", { commands }) ?? false
+          }
           onMemoryList={() => transport?.request("memory.list")}
           onMemoryToggle={(enabled) => transport?.request("memory.toggle", { enabled })}
           onRemember={(content) => transport?.request("memory.remember", { content })}

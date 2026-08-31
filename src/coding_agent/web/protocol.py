@@ -3,7 +3,7 @@ from __future__ import annotations
 from enum import StrEnum
 from typing import Annotated, Any, Literal, TypeAlias
 
-from pydantic import BaseModel, ConfigDict, Field, TypeAdapter
+from pydantic import BaseModel, ConfigDict, Field, TypeAdapter, field_validator
 
 from coding_agent.safety.approval import ApprovalDecision
 
@@ -42,6 +42,11 @@ class SessionDeleteRequest(RequestFrame):
     session_id: str = Field(pattern=SESSION_PATTERN)
 
 
+class ProjectRemoveRequest(RequestFrame):
+    type: Literal["project.remove"]
+    path: str = Field(min_length=1, max_length=4096)
+
+
 class TurnStartRequest(RequestFrame):
     type: Literal["turn.start"]
     task: str = Field(min_length=1, max_length=100_000)
@@ -71,6 +76,17 @@ class ChangeUndoRequest(RequestFrame):
     change_id: str = Field(pattern=r"^[0-9a-f]{32}$")
 
 
+class ChangeReviewRequest(RequestFrame):
+    type: Literal["change.review"]
+    change_id: str = Field(pattern=r"^[0-9a-f]{32}$")
+    decision: Literal["accept", "discard"]
+
+
+class ChangesReviewRequest(RequestFrame):
+    type: Literal["changes.review"]
+    decision: Literal["accept", "discard"]
+
+
 class ConfigGetRequest(RequestFrame):
     type: Literal["config.get"]
 
@@ -90,6 +106,22 @@ class StepsSetRequest(RequestFrame):
 
 class StepsResetRequest(RequestFrame):
     type: Literal["steps.reset"]
+
+
+class VerificationSetRequest(RequestFrame):
+    type: Literal["verification.set"]
+    commands: list[str] = Field(max_length=8)
+
+    @field_validator("commands")
+    @classmethod
+    def validate_commands(cls, commands: list[str]) -> list[str]:
+        normalized: list[str] = []
+        for command in commands:
+            value = command.strip()
+            if not value or len(value) > 20_000 or "\n" in value or "\r" in value:
+                raise ValueError("verification commands must be non-empty single-line values")
+            normalized.append(value)
+        return normalized
 
 
 class PermissionsGetRequest(RequestFrame):
@@ -186,17 +218,21 @@ ClientRequest: TypeAlias = Annotated[
     | SessionCreateRequest
     | SessionResumeRequest
     | SessionDeleteRequest
+    | ProjectRemoveRequest
     | TurnStartRequest
     | TurnCancelRequest
     | ApprovalResolveRequest
     | FilePreviewRequest
     | ChangesListRequest
     | ChangeUndoRequest
+    | ChangeReviewRequest
+    | ChangesReviewRequest
     | ConfigGetRequest
     | RuntimeStatusRequest
     | StepsGetRequest
     | StepsSetRequest
     | StepsResetRequest
+    | VerificationSetRequest
     | PermissionsGetRequest
     | PermissionsSetRequest
     | PlanGetRequest

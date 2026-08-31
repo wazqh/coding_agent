@@ -86,7 +86,13 @@ export function Timeline({
       return item.activityKind === "validation" ? (
         <ValidationCard item={item} key={item.id} />
       ) : (
-        <ActivityRow item={item} showRaw={showRaw} key={item.id} />
+        <ActivityRow
+          item={item}
+          showRaw={showRaw}
+          onApproval={onApproval}
+          approvalAvailable={approvalAvailable}
+          key={item.id}
+        />
       );
     }
     if (item.kind === "approval") {

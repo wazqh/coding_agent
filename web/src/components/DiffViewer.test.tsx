@@ -75,3 +75,16 @@ test("offers undo for the exact displayed diff with an explicit confirmation", a
 
   expect(onUndo).toHaveBeenCalledWith("change-1");
 });
+
+test("switches review layout and exposes explicit accept and discard actions", async () => {
+  const user = userEvent.setup();
+  const onReview = vi.fn();
+  render(<DiffViewer change={change} onReview={onReview} />);
+
+  await user.click(screen.getByRole("button", { name: "并排对比" }));
+  expect(screen.getByRole("table", { name: "并排 Diff" })).toBeInTheDocument();
+  await user.click(screen.getByRole("button", { name: "接受此变更" }));
+  expect(onReview).toHaveBeenCalledWith("change-1", "accept");
+  await user.click(screen.getByRole("button", { name: "放弃此变更" }));
+  expect(onReview).toHaveBeenCalledWith("change-1", "discard");
+});

@@ -398,24 +398,38 @@ test("shows a blocked command as a readable safety explanation instead of raw JS
       kind: "activity",
       activityId: "command:blocked",
       activityKind: "command",
-      title: "运行命令",
-      summary: "command matches a destructive safety rule",
+      title: "已阻止高风险命令",
+      summary: "强制清理 Git 工作区",
       status: "failed",
       detail: {
         ok: false,
         code: "DANGEROUS_COMMAND",
         summary: "command matches a destructive safety rule",
-        data: { command: "git clean -fd", hard_blocked: true },
+        data: {
+          command: "git clean -fd",
+          hard_blocked: true,
+          rule_id: "git-clean-force",
+          risk_label: "强制清理 Git 工作区",
+          matched_text: "git clean -fd",
+          guidance: "先查看 git status 和 git clean -nd，再让用户确认精确目标。",
+        },
       },
     },
   ];
   const view = render(<Timeline items={blocked} onApproval={() => true} />);
 
-  await user.click(screen.getByRole("button", { name: /运行命令/ }));
+  await user.click(screen.getByRole("button", { name: /已阻止高风险命令/ }));
 
-  expect(screen.getByText("git clean -fd")).toBeInTheDocument();
-  expect(screen.getByText("安全策略已阻止")).toBeInTheDocument();
-  expect(screen.getByText(/不能在图形界面中覆盖/)).toBeInTheDocument();
+  expect(screen.getByText("已阻止", { selector: ".activity-heading i" })).toBeInTheDocument();
+  expect(screen.getByText("已阻止高风险操作")).toBeInTheDocument();
+  expect(screen.getByText("硬安全规则")).toBeInTheDocument();
+  expect(screen.getAllByText("强制清理 Git 工作区")).toHaveLength(2);
+  expect(screen.getByText(/先查看 git status/)).toBeInTheDocument();
+  expect(screen.getByText("命令已在执行前停止，未对工作区产生改动。")).toBeInTheDocument();
+  expect(view.container.querySelector(".hard-block-shield")).toBeInTheDocument();
+  expect(view.container.querySelector(".activity-status")?.textContent).not.toContain("×");
+  expect(view.container.querySelector(".safety-command mark")).toHaveTextContent("git clean -fd");
+  expect(screen.queryByText("DANGEROUS_COMMAND")).not.toBeInTheDocument();
   expect(view.container.querySelector(".activity-detail")).toBeNull();
 });
 

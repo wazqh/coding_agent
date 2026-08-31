@@ -6,14 +6,19 @@ from typing import Any
 
 import pytest
 from conftest import FakeModel
+from pydantic import BaseModel
 
 from coding_agent.config import Settings
 from coding_agent.context import estimate_request_tokens
 from coding_agent.controller import AgentController
-from coding_agent.events import AgentState, EventKind, ModelStreamEvent, ToolCall
-from coding_agent.safety.approval import ApprovalPolicy
+from coding_agent.events import AgentState, EventKind, ModelStreamEvent, ToolCall, ToolResult
+from coding_agent.safety.approval import ApprovalDecision, ApprovalPolicy, ApprovalRequest
+from coding_agent.safety.paths import sha256_file
 from coding_agent.session import SessionError, SessionStore
-from coding_agent.tools.registry import default_registry
+from coding_agent.tools.base import Tool, ToolContext
+from coding_agent.tools.command import RunCommandArgs
+from coding_agent.tools.filesystem import WriteFileTool
+from coding_agent.tools.registry import ToolRegistry, default_registry
 
 
 def text_response(value: str) -> list[ModelStreamEvent]:
@@ -38,18 +43,59 @@ def make_controller(
     session_id: str | None = None,
     events: list | None = None,
     monotonic: Callable[[], float] | None = None,
+    tools: ToolRegistry | None = None,
+    verification_commands: list[str] | None = None,
 ) -> AgentController:
     sessions = SessionStore(settings.data_dir)
     return AgentController(
         settings=settings,
         model=model,  # type: ignore[arg-type]
-        tools=default_registry(),
+        tools=tools or default_registry(),
         sessions=sessions,
         approval=approval or ApprovalPolicy("auto"),
         session_id=session_id,
         event_sink=events.append if events is not None else None,
+        verification_commands=verification_commands or [],
         **({"monotonic": monotonic} if monotonic is not None else {}),
     )
+
+
+class FakeVerificationTool(Tool):
+    name = "run_command"
+    description = "Test verification command runner."
+    args_model = RunCommandArgs
+
+    def __init__(
+        self,
+        results: list[ToolResult],
+        *,
+        require_approval: bool = False,
+        after_execute: Callable[[], None] | None = None,
+    ) -> None:
+        self.results = list(results)
+        self.commands: list[str] = []
+        self.require_approval = require_approval
+        self.after_execute = after_execute
+
+    def execute(self, args: BaseModel, context: ToolContext) -> ToolResult:
+        values = RunCommandArgs.model_validate(args)
+        self.commands.append(values.command)
+        if self.require_approval and not context.approve(
+            ApprovalRequest(
+                action="run_command",
+                subject=values.command,
+                summary=f"run command: {values.command}",
+            )
+        ):
+            return ToolResult(ok=False, code="APPROVAL_DENIED", summary="command denied")
+        result = self.results.pop(0)
+        if self.after_execute is not None:
+            self.after_execute()
+        return result
+
+
+def verification_registry(tool: FakeVerificationTool) -> ToolRegistry:
+    return ToolRegistry([WriteFileTool(), tool])
 
 
 def test_agent_loop_tool_observation_then_completion(settings: Settings) -> None:
@@ -160,6 +206,368 @@ def test_noninteractive_approval_returns_policy_exit(settings: Settings) -> None
     result = controller.run_turn("create a file")
     assert result.exit_code == 3
     assert not (settings.cwd / "created.txt").exists()
+
+
+def test_approval_events_are_correlated_with_the_tool_operation(settings: Settings) -> None:
+    call = ToolCall(
+        id="write-operation",
+        name="write_file",
+        arguments={"path": "created.txt", "content": "content"},
+    )
+    events: list = []
+    controller = make_controller(
+        settings,
+        FakeModel([tool_response(call), text_response("done")]),
+        approval=ApprovalPolicy(
+            "prompt",
+            callback=lambda _: ApprovalDecision.ALLOW_ONCE,
+        ),
+        events=events,
+    )
+
+    controller.run_turn("create a file")
+
+    approval_events = [event for event in events if event.kind is EventKind.APPROVAL]
+    assert len(approval_events) == 2
+    assert {event.data["operation_id"] for event in approval_events} == {"write-operation"}
+
+
+def test_recorded_changes_survive_session_restore_with_safe_undo_data(
+    settings: Settings,
+) -> None:
+    source = settings.cwd / "demo.txt"
+    source.write_text("before\n", encoding="utf-8")
+    call = ToolCall(
+        id="edit-operation",
+        name="write_file",
+        arguments={
+            "path": "demo.txt",
+            "content": "after\n",
+            "expected_sha256": sha256_file(source),
+        },
+    )
+    model = FakeModel([tool_response(call), text_response("done")])
+    controller = make_controller(settings, model)
+    controller.run_turn("update the file")
+    session_id = controller.session_id
+
+    restored = make_controller(settings, FakeModel([]), session_id=session_id)
+
+    assert len(restored.working.changes) == 1
+    change = restored.working.changes[0]
+    assert change.path == "demo.txt"
+    assert (change.before_text or "").splitlines() == ["before"]
+    assert change.review_status == "pending"
+
+
+def test_verification_hooks_do_not_run_when_the_turn_makes_no_change(
+    settings: Settings,
+) -> None:
+    verifier = FakeVerificationTool([ToolResult(ok=True, code="OK", summary="passed")])
+    controller = make_controller(
+        settings,
+        FakeModel([text_response("Nothing to change.")]),
+        tools=verification_registry(verifier),
+        verification_commands=["python -m pytest -q"],
+    )
+
+    result = controller.run_turn("inspect only")
+
+    assert result.status is AgentState.COMPLETED
+    assert verifier.commands == []
+
+
+def test_verification_hook_runs_after_a_changed_turn_and_is_visible_as_validation(
+    settings: Settings,
+) -> None:
+    verifier = FakeVerificationTool(
+        [ToolResult(ok=True, code="OK", summary="tests passed", data={"exit_code": 0})]
+    )
+    events: list = []
+    controller = make_controller(
+        settings,
+        FakeModel(
+            [
+                tool_response(
+                    ToolCall(
+                        id="write",
+                        name="write_file",
+                        arguments={"path": "demo.txt", "content": "first\n"},
+                    )
+                ),
+                text_response("Implemented and verified."),
+            ]
+        ),
+        events=events,
+        tools=verification_registry(verifier),
+        verification_commands=["python -m pytest -q"],
+    )
+
+    result = controller.run_turn("create demo")
+
+    assert result.status is AgentState.COMPLETED
+    assert result.tool_steps == 2
+    assert verifier.commands == ["python -m pytest -q"]
+    validation = next(
+        event
+        for event in events
+        if event.kind is EventKind.TOOL_RESULT and event.data.get("verification") is True
+    )
+    assert validation.data["name"] == "run_command"
+    assert validation.data["result"]["ok"] is True
+
+
+def test_failed_verification_is_fed_back_to_the_model_before_a_bounded_repair(
+    settings: Settings,
+) -> None:
+    verifier = FakeVerificationTool(
+        [
+            ToolResult(
+                ok=False,
+                code="COMMAND_FAILED",
+                summary="tests failed",
+                data={"exit_code": 1, "stderr": "assertion failed"},
+            ),
+            ToolResult(ok=True, code="OK", summary="tests passed", data={"exit_code": 0}),
+        ]
+    )
+    model = FakeModel(
+        [
+            tool_response(
+                ToolCall(
+                    id="write-1",
+                    name="write_file",
+                    arguments={"path": "demo.txt", "content": "first\n"},
+                )
+            ),
+            text_response("Initial implementation."),
+            tool_response(
+                ToolCall(
+                    id="write-2",
+                    name="write_file",
+                    arguments={"path": "demo.txt", "content": "fixed\n"},
+                )
+            ),
+            text_response("Fixed and verified."),
+        ]
+    )
+    controller = make_controller(
+        settings,
+        model,
+        tools=verification_registry(verifier),
+        verification_commands=["python -m pytest -q"],
+    )
+
+    result = controller.run_turn("create a passing demo")
+
+    assert result.status is AgentState.COMPLETED
+    assert verifier.commands == ["python -m pytest -q", "python -m pytest -q"]
+    repair_request = model.requests[2][0]
+    verification_call = next(
+        message
+        for message in repair_request
+        if message.get("role") == "assistant"
+        and message.get("tool_calls")
+        and message["tool_calls"][0]["id"].startswith("verification-")
+    )
+    verification_result = next(
+        message
+        for message in repair_request
+        if message.get("role") == "tool"
+        and message.get("tool_call_id") == verification_call["tool_calls"][0]["id"]
+    )
+    assert "tests failed" in verification_result["content"]
+
+
+def test_verification_stops_after_two_repair_opportunities(settings: Settings) -> None:
+    verifier = FakeVerificationTool(
+        [
+            ToolResult(ok=False, code="COMMAND_FAILED", summary=f"failure {index}")
+            for index in range(3)
+        ]
+    )
+    model = FakeModel(
+        [
+            tool_response(
+                ToolCall(
+                    id="write",
+                    name="write_file",
+                    arguments={"path": "demo.txt", "content": "broken\n"},
+                )
+            ),
+            text_response("Attempt one."),
+            text_response("Attempt two."),
+            text_response("Attempt three."),
+        ]
+    )
+    controller = make_controller(
+        settings,
+        model,
+        tools=verification_registry(verifier),
+        verification_commands=["python -m pytest -q"],
+    )
+
+    result = controller.run_turn("create demo")
+
+    assert result.status is AgentState.FAILED
+    assert result.reason == "verification failed after two repair attempts"
+    assert len(verifier.commands) == 3
+
+
+def test_verification_command_uses_existing_approval_boundary(settings: Settings) -> None:
+    verifier = FakeVerificationTool(
+        [ToolResult(ok=True, code="OK", summary="passed")],
+        require_approval=True,
+    )
+    approvals: list[ApprovalRequest] = []
+    events: list = []
+    controller = make_controller(
+        settings,
+        FakeModel(
+            [
+                tool_response(
+                    ToolCall(
+                        id="write",
+                        name="write_file",
+                        arguments={"path": "demo.txt", "content": "content\n"},
+                    )
+                ),
+                text_response("done"),
+            ]
+        ),
+        approval=ApprovalPolicy(
+            "prompt",
+            callback=lambda request: approvals.append(request) or ApprovalDecision.ALLOW_ONCE,
+        ),
+        events=events,
+        tools=verification_registry(verifier),
+        verification_commands=["python -m pytest -q"],
+    )
+
+    result = controller.run_turn("create demo")
+
+    assert result.status is AgentState.COMPLETED
+    assert [request.action for request in approvals] == ["write_file", "run_command"]
+    verification_approvals = [
+        event
+        for event in events
+        if event.kind is EventKind.APPROVAL
+        and str(event.data.get("operation_id", "")).startswith("verification-")
+    ]
+    assert len(verification_approvals) == 2
+
+
+def test_verification_denial_uses_policy_exit_code(settings: Settings) -> None:
+    verifier = FakeVerificationTool(
+        [ToolResult(ok=True, code="OK", summary="must not run")],
+        require_approval=True,
+    )
+    controller = make_controller(
+        settings,
+        FakeModel(
+            [
+                tool_response(
+                    ToolCall(
+                        id="write",
+                        name="write_file",
+                        arguments={"path": "demo.txt", "content": "content\n"},
+                    )
+                ),
+                text_response("done"),
+            ]
+        ),
+        approval=ApprovalPolicy(
+            "prompt",
+            callback=lambda request: (
+                ApprovalDecision.DENY
+                if request.action == "run_command"
+                else ApprovalDecision.ALLOW_ONCE
+            ),
+        ),
+        tools=verification_registry(verifier),
+        verification_commands=["python -m pytest -q"],
+    )
+
+    result = controller.run_turn("create demo")
+
+    assert result.status is AgentState.FAILED
+    assert result.exit_code == 3
+    assert result.reason == "verification approval was denied"
+
+
+def test_verification_stops_when_the_turn_is_cancelled_during_a_check(
+    settings: Settings,
+) -> None:
+    cancel_event = Event()
+    verifier = FakeVerificationTool(
+        [ToolResult(ok=True, code="OK", summary="cancelled after completion")],
+        after_execute=cancel_event.set,
+    )
+    controller = make_controller(
+        settings,
+        FakeModel(
+            [
+                tool_response(
+                    ToolCall(
+                        id="write",
+                        name="write_file",
+                        arguments={"path": "demo.txt", "content": "content\n"},
+                    )
+                ),
+                text_response("done"),
+            ]
+        ),
+        tools=verification_registry(verifier),
+        verification_commands=["python -m pytest -q"],
+    )
+
+    result = controller.run_turn("create demo", cancel_event=cancel_event)
+
+    assert result.status is AgentState.CANCELLED
+    assert result.exit_code == 130
+
+
+def test_verification_commands_share_the_existing_tool_step_budget(settings: Settings) -> None:
+    settings.agent.max_steps = 2
+    verifier = FakeVerificationTool([ToolResult(ok=True, code="OK", summary="first passed")])
+    controller = make_controller(
+        settings,
+        FakeModel(
+            [
+                tool_response(
+                    ToolCall(
+                        id="write",
+                        name="write_file",
+                        arguments={"path": "demo.txt", "content": "content\n"},
+                    )
+                ),
+                text_response("done"),
+            ]
+        ),
+        tools=verification_registry(verifier),
+        verification_commands=["python -m pytest -q", "python -m ruff check ."],
+    )
+
+    result = controller.run_turn("create demo")
+
+    assert result.status is AgentState.FAILED
+    assert result.tool_steps == 2
+    assert result.reason == "verification could not run within the tool step budget"
+    assert verifier.commands == ["python -m pytest -q"]
+
+
+def test_context_breakdown_uses_complete_request_categories(settings: Settings) -> None:
+    controller = make_controller(settings, FakeModel([]))
+    controller._last_system_prompt = "system instructions"
+    controller.conversation = [{"role": "user", "content": "hello"}]
+    controller.last_context_tokens = 100
+
+    breakdown = controller.context_breakdown()
+
+    assert breakdown["system_and_project"] > 0
+    assert breakdown["conversation_and_results"] > 0
+    assert breakdown["tool_schemas"] > 0
+    assert breakdown["other"] >= 0
 
 
 def test_model_error_empty_response_and_step_budget(settings: Settings) -> None:

@@ -19,6 +19,7 @@ from coding_agent.web.protocol import (
     SessionDeleteRequest,
     SessionResumeRequest,
     StepsSetRequest,
+    VerificationSetRequest,
     ViewEventType,
 )
 from tests.web.test_coordinator import FakeRuntime
@@ -260,6 +261,7 @@ def test_dispatches_runtime_status_and_management_mutations() -> None:
         def __init__(self) -> None:
             self.permissions: list[str] = []
             self.steps: list[int] = []
+            self.verification: list[list[str]] = []
 
         def snapshot(self) -> Snapshot:
             return Snapshot()
@@ -270,6 +272,10 @@ def test_dispatches_runtime_status_and_management_mutations() -> None:
 
         def set_steps(self, value: int) -> Snapshot:
             self.steps.append(value)
+            return Snapshot()
+
+        def set_verification_commands(self, commands: list[str]) -> Snapshot:
+            self.verification.append(commands)
             return Snapshot()
 
     coordinator = TurnCoordinator()
@@ -293,15 +299,26 @@ def test_dispatches_runtime_status_and_management_mutations() -> None:
         coordinator,
         StepsSetRequest(type="steps.set", request_id="steps", value=40),
     )
+    _dispatch_request(
+        coordinator,
+        VerificationSetRequest(
+            type="verification.set",
+            request_id="verification",
+            commands=["python -m pytest -q"],
+        ),
+    )
 
     events = coordinator.drain_events()
     assert management.permissions == ["auto"]
     assert management.steps == [40]
+    assert management.verification == [["python -m pytest -q"]]
     assert [event.type for event in events] == [
         ViewEventType.RUNTIME_UPDATED,
         ViewEventType.RUNTIME_UPDATED,
         ViewEventType.COMMAND_COMPLETED,
         ViewEventType.RUNTIME_UPDATED,
         ViewEventType.COMMAND_COMPLETED,
+        ViewEventType.RUNTIME_UPDATED,
+        ViewEventType.COMMAND_COMPLETED,
     ]
-    assert events[-1].data == {"command": "steps.set", "status": "completed"}
+    assert events[-1].data == {"command": "verification.set", "status": "completed"}

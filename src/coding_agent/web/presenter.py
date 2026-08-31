@@ -197,6 +197,7 @@ class AgentEventPresenter:
                 ViewEventType.ACTIVITY_UPSERT,
                 {
                     "activity_id": activity_id,
+                    "operation_id": call_id,
                     "kind": "workspace_check",
                     "title": "检查工作区",
                     "status": "running",
@@ -211,13 +212,18 @@ class AgentEventPresenter:
 
         activity_id = f"tool:{call_id}"
         self._call_activity[call_id] = activity_id
-        activity_kind = self._activity_kind(name, arguments)
+        activity_kind = (
+            "validation"
+            if event.data.get("verification") is True
+            else self._activity_kind(name, arguments)
+        )
         self._call_kind[call_id] = activity_kind
         return self._view(
             event,
             ViewEventType.ACTIVITY_UPSERT,
             {
                 "activity_id": activity_id,
+                "operation_id": call_id,
                 "kind": activity_kind,
                 "title": self._activity_title(name, activity_kind),
                 "status": "running",
@@ -232,12 +238,16 @@ class AgentEventPresenter:
         result = event.data.get("result", {})
         if not isinstance(result, dict):
             result = {}
+        result_data = result.get("data", {})
+        result_data = result_data if isinstance(result_data, dict) else {}
+        hard_blocked = (
+            result.get("code") == "DANGEROUS_COMMAND" or result_data.get("hard_blocked") is True
+        )
         if name == "run_command":
             arguments = self._call_arguments.get(call_id, {})
             command = arguments.get("command")
             if isinstance(command, str):
                 result = dict(result)
-                result_data = result.get("data", {})
                 result_data = dict(result_data) if isinstance(result_data, dict) else {}
                 result_data.setdefault("command", command)
                 result["data"] = result_data
@@ -261,14 +271,21 @@ class AgentEventPresenter:
         )
         data: dict[str, Any] = {
             "activity_id": activity_id,
+            "operation_id": call_id,
             "kind": activity_kind,
             "title": (
-                "检查工作区"
+                "已阻止高风险命令"
+                if hard_blocked
+                else "检查工作区"
                 if name in _ROUTINE_TOOLS
                 else self._activity_title(name, activity_kind)
             ),
             "status": status,
-            "summary": str(result.get("summary", "操作已完成")),
+            "summary": (
+                str(result_data.get("risk_label", "安全规则已阻止该命令"))
+                if hard_blocked
+                else str(result.get("summary", "操作已完成"))
+            ),
             "detail": (
                 {
                     "steps": [dict(step) for step in routine.steps],
@@ -311,6 +328,7 @@ class AgentEventPresenter:
         summary["reversible"] = data.get("reversible") is not False and not bool(
             result.get("truncated")
         )
+        summary["review_status"] = "pending"
         return self._view(
             event,
             ViewEventType.CHANGE_RECORDED,

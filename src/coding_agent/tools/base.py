@@ -23,6 +23,7 @@ class AppliedChange(BaseModel):
     before_text: str | None = Field(default=None, exclude=True, repr=False)
     after_sha256: str
     reversible: bool = True
+    review_status: Literal["pending", "accepted", "conflicted"] = "pending"
 
 
 class WorkingState(BaseModel):
@@ -52,6 +53,7 @@ class ToolContext:
         command_timeout: int = 120,
         skills: SkillRegistry | None = None,
         cancel_requested: Callable[[], bool] | None = None,
+        operation_id: str | None = None,
     ) -> None:
         self.workspace = workspace
         self.approval = approval
@@ -62,6 +64,7 @@ class ToolContext:
         self.command_timeout = command_timeout
         self.skills = skills
         self.cancel_requested = cancel_requested or (lambda: False)
+        self.operation_id = operation_id
 
     def emit(
         self,
@@ -86,13 +89,20 @@ class ToolContext:
             return False
         self.emit(
             EventKind.APPROVAL,
-            {"request": request.model_dump(mode="json")},
+            {
+                "operation_id": self.operation_id,
+                "request": request.model_dump(mode="json"),
+            },
             state=AgentState.AWAITING_APPROVAL,
         )
         decision = self.approval.decide(request)
         self.emit(
             EventKind.APPROVAL,
-            {"decision": decision.value, "subject": request.subject},
+            {
+                "operation_id": self.operation_id,
+                "decision": decision.value,
+                "subject": request.subject,
+            },
             state=AgentState.EXECUTING,
         )
         return decision is not ApprovalDecision.DENY and not self.cancel_requested()

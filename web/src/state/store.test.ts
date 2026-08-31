@@ -198,6 +198,65 @@ test("upserts activities and stores approval ids as opaque values", () => {
   expect(state.items[1]).toMatchObject({ kind: "approval", approvalId: "approval-1" });
 });
 
+test("merges an approval into the operation card with the same stable id", () => {
+  const store = createAgentStore();
+  const apply = store.getState().applyEvent;
+  apply({
+    protocol_version: 2,
+    type: "activity.upsert",
+    seq: 1,
+    session_id: sessionId,
+    turn_id: "turn-operation",
+    data: {
+      activity_id: "tool:write-1",
+      operation_id: "write-1",
+      kind: "file_change",
+      title: "修改文件",
+      status: "running",
+      summary: "README.md",
+    },
+  });
+  apply({
+    protocol_version: 2,
+    type: "approval.requested",
+    seq: 2,
+    session_id: sessionId,
+    turn_id: "turn-operation",
+    data: {
+      approval_id: "approval-write",
+      operation_id: "write-1",
+      request: {
+        action: "edit_file",
+        subject: "README.md",
+        summary: "edit README.md",
+      },
+    },
+  });
+  apply({
+    protocol_version: 2,
+    type: "approval.resolved",
+    seq: 3,
+    session_id: sessionId,
+    turn_id: "turn-operation",
+    data: {
+      approval_id: "approval-write",
+      operation_id: "write-1",
+      decision: "allow_once",
+    },
+  });
+
+  expect(store.getState().items).toHaveLength(1);
+  expect(store.getState().items[0]).toMatchObject({
+    kind: "activity",
+    operationId: "write-1",
+    approval: {
+      approvalId: "approval-write",
+      resolved: true,
+      decision: "allow_once",
+    },
+  });
+});
+
 test("keeps accepted events as authority and reduces real usage fields", () => {
   const store = createAgentStore();
   store.getState().applyEvent({

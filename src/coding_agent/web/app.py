@@ -17,7 +17,9 @@ from coding_agent.web.coordinator import CoordinatorError, TurnCoordinator
 from coding_agent.web.preview import PreviewError
 from coding_agent.web.protocol import (
     ApprovalResolveRequest,
+    ChangeReviewRequest,
     ChangesListRequest,
+    ChangesReviewRequest,
     ChangeUndoRequest,
     CompletionQueryRequest,
     ConfigGetRequest,
@@ -37,6 +39,7 @@ from coding_agent.web.protocol import (
     PermissionsGetRequest,
     PermissionsSetRequest,
     PlanGetRequest,
+    ProjectRemoveRequest,
     RuntimeStatusRequest,
     SessionCreateRequest,
     SessionDeleteRequest,
@@ -50,6 +53,7 @@ from coding_agent.web.protocol import (
     StepsSetRequest,
     TurnCancelRequest,
     TurnStartRequest,
+    VerificationSetRequest,
     ViewEventType,
     parse_client_request,
 )
@@ -238,6 +242,55 @@ def _dispatch_request(coordinator: TurnCoordinator, request: object) -> None:
             {"changes": coordinator.list_changes()},
         )
         return
+    if isinstance(request, ProjectRemoveRequest):
+        try:
+            coordinator.remove_project(request.path)
+        except CoordinatorError as exc:
+            coordinator.emit(
+                ViewEventType.ERROR,
+                {"severity": "error", "message": str(exc), "recoverable": True},
+            )
+            return
+        coordinator.publish_snapshot()
+        return
+    if isinstance(request, (ChangeReviewRequest, ChangesReviewRequest)):
+        try:
+            if isinstance(request, ChangeReviewRequest):
+                result = coordinator.review_change(request.change_id, request.decision)
+                title = "接受变更" if request.decision == "accept" else "放弃变更"
+                summary = str(result["path"])
+                activity_id = f"review:{request.change_id}"
+            else:
+                result = coordinator.review_all_changes(request.decision)
+                title = "接受全部变更" if request.decision == "accept" else "放弃全部变更"
+                summary = f"已处理 {result['processed']} 处"
+                activity_id = f"review-all:{request.decision}"
+        except (CoordinatorError, OSError, ValueError) as exc:
+            coordinator.emit(
+                ViewEventType.ERROR,
+                {
+                    "severity": "error",
+                    "message": str(exc),
+                    "code": "CHANGE_REVIEW_FAILED",
+                    "recoverable": True,
+                },
+            )
+            return
+        coordinator.emit(
+            ViewEventType.CHANGES_UPDATED,
+            {"changes": coordinator.list_changes()},
+        )
+        coordinator.emit(
+            ViewEventType.ACTIVITY_UPSERT,
+            {
+                "activity_id": activity_id,
+                "kind": "file_change",
+                "title": title,
+                "status": "completed",
+                "summary": summary,
+            },
+        )
+        return
     if isinstance(request, ChangeUndoRequest):
         try:
             change = coordinator.undo_change(request.change_id)
@@ -306,6 +359,17 @@ def _dispatch_request(coordinator: TurnCoordinator, request: object) -> None:
         return
     if isinstance(request, StepsResetRequest):
         snapshot = coordinator.reset_steps()
+        coordinator.emit(
+            ViewEventType.RUNTIME_UPDATED,
+            {"runtime": snapshot.model_dump(mode="json")},
+        )
+        coordinator.emit(
+            ViewEventType.COMMAND_COMPLETED,
+            {"command": request.type, "status": "completed"},
+        )
+        return
+    if isinstance(request, VerificationSetRequest):
+        snapshot = coordinator.set_verification_commands(request.commands)
         coordinator.emit(
             ViewEventType.RUNTIME_UPDATED,
             {"runtime": snapshot.model_dump(mode="json")},
@@ -445,10 +509,10 @@ def _dispatch_request(coordinator: TurnCoordinator, request: object) -> None:
         )
         return
     if isinstance(request, ContextCompactRequest):
-        result = coordinator.compact_context()
+        compact_result = coordinator.compact_context()
         coordinator.emit(
             ViewEventType.CONTEXT_COMPACTED,
-            {"result": result.model_dump(mode="json")},
+            {"result": compact_result.model_dump(mode="json")},
         )
         coordinator.emit(
             ViewEventType.RUNTIME_UPDATED,

@@ -276,7 +276,12 @@ def test_file_change_while_approval_pending_is_rejected(tmp_path: Path) -> None:
 
 def test_command_policy_secret_filter_and_execution(tmp_path: Path) -> None:
     policy = CommandPolicy()
-    assert not policy.classify("git reset --hard HEAD").allowed
+    reset = policy.classify("git reset --hard HEAD")
+    assert not reset.allowed
+    assert reset.rule_id == "git-reset-hard"
+    assert reset.risk_label == "破坏性 Git 重置"
+    assert reset.matched_text == "git reset --hard"
+    assert "保留工作区改动" in reset.guidance
     assert not policy.classify("Remove-Item x -Recurse").allowed
     assert not policy.classify("shutdown /s").allowed
     assert not policy.classify("git status; shutdown /s").allowed
@@ -328,6 +333,10 @@ def test_command_timeout_output_bound_and_tool_rejection(tmp_path: Path) -> None
     assert denied.data == {
         "command": "git clean -fd",
         "hard_blocked": True,
+        "rule_id": "git-clean-force",
+        "risk_label": "强制清理 Git 工作区",
+        "matched_text": "git clean -fd",
+        "guidance": "先查看 git status 和 git clean -nd，再让用户确认精确目标。",
     }
 
 

@@ -67,6 +67,11 @@ class ContextSummary(_FrozenModel):
     estimated_tokens: int = Field(ge=0)
     context_window: int = Field(ge=1)
     percent_used: int = Field(ge=0)
+    breakdown: dict[str, int] = Field(default_factory=dict)
+
+
+class VerificationSummary(_FrozenModel):
+    commands: tuple[str, ...] = ()
 
 
 class MemorySummary(_FrozenModel):
@@ -102,6 +107,7 @@ class RuntimeSnapshot(_FrozenModel):
     steps: StepSettings
     model: ModelSummary
     context: ContextSummary
+    verification: VerificationSummary
     resources: ResourceSummary
     plan: tuple[PlanStep, ...] = ()
 
@@ -151,6 +157,7 @@ class RuntimeManagement:
         memory = controller.memory
         skills = controller.skills
         tokens = max(0, int(controller.last_context_tokens))
+        breakdown = controller.context_breakdown()
         context_window = max(1, int(agent.context_window))
         raw_plan = getattr(controller.working, "plan", [])
         plan = tuple(
@@ -185,6 +192,10 @@ class RuntimeManagement:
                 estimated_tokens=tokens,
                 context_window=context_window,
                 percent_used=round(tokens * 100 / context_window),
+                breakdown=breakdown,
+            ),
+            verification=VerificationSummary(
+                commands=tuple(self.workspace_settings.load().verification.commands)
             ),
             resources=ResourceSummary(
                 project_resources_loaded=self.runtime.trusted_project,
@@ -219,6 +230,19 @@ class RuntimeManagement:
         controller = self._controller_provider()
         self.workspace_settings.reset_max_steps()
         controller.settings.agent.max_steps = controller.settings.agent.configured_max_steps
+        return self.snapshot()
+
+    def set_verification_commands(self, commands: list[str]) -> RuntimeSnapshot:
+        self.workspace_settings.set_verification_commands(commands)
+        normalized = tuple(self.workspace_settings.load().verification.commands)
+        self.runtime.verification_commands = normalized
+        self._controller_provider().verification_commands = normalized
+        return self.snapshot()
+
+    def reset_verification_commands(self) -> RuntimeSnapshot:
+        self.workspace_settings.reset_verification_commands()
+        self.runtime.verification_commands = ()
+        self._controller_provider().verification_commands = ()
         return self.snapshot()
 
     def model_catalog(self) -> ModelCatalogSnapshot:

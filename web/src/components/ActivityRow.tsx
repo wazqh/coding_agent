@@ -1,7 +1,9 @@
 import { useState } from "react";
 
+import type { ApprovalDecision } from "../protocol/types";
 import type { TimelineItem } from "../state/store";
-import { ChevronIcon } from "./icons";
+import { ApprovalCard } from "./ApprovalCard";
+import { ChevronIcon, ShieldIcon } from "./icons";
 import { StructuredToolDetail } from "./StructuredToolDetail";
 
 type Activity = Extract<TimelineItem, { kind: "activity" }>;
@@ -29,13 +31,41 @@ function activitySteps(detail: unknown): ActivityStep[] {
   });
 }
 
-export function ActivityRow({ item, showRaw = false }: { item: Activity; showRaw?: boolean }) {
+function isHardBlocked(detail: unknown): boolean {
+  if (typeof detail !== "object" || detail === null) return false;
+  const result = "raw" in detail
+    ? (detail as { raw?: unknown }).raw
+    : detail;
+  if (typeof result !== "object" || result === null) return false;
+  const value = result as Record<string, unknown>;
+  const data = typeof value.data === "object" && value.data !== null
+    ? value.data as Record<string, unknown>
+    : {};
+  return value.code === "DANGEROUS_COMMAND" || data.hard_blocked === true;
+}
+
+interface ActivityRowProps {
+  item: Activity;
+  showRaw?: boolean;
+  onApproval?: (approvalId: string, decision: ApprovalDecision) => boolean;
+  approvalAvailable?: boolean;
+}
+
+export function ActivityRow({
+  item,
+  showRaw = false,
+  onApproval = () => false,
+  approvalAvailable = true,
+}: ActivityRowProps) {
   const steps = activitySteps(item.detail);
   const structured = steps.length > 0;
+  const hardBlocked = isHardBlocked(item.detail);
   const [expanded, setExpanded] = useState(structured);
   const detailVisible = showRaw || (!structured && expanded);
   const statusIcon =
-    item.status === "failed"
+    hardBlocked
+      ? <ShieldIcon className="hard-block-shield" />
+      : item.status === "failed"
       ? "!"
       : item.status === "completed"
         ? "✓"
@@ -43,7 +73,13 @@ export function ActivityRow({ item, showRaw = false }: { item: Activity; showRaw
           ? "›"
           : "·";
   const statusLabel =
-    item.status === "failed" ? "失败" : item.status === "completed" ? "完成" : "执行中";
+    hardBlocked
+      ? "已阻止"
+      : item.status === "failed"
+        ? "失败"
+        : item.status === "completed"
+          ? "完成"
+          : "执行中";
   const content = (
     <>
       <span className="activity-copy">
@@ -59,7 +95,9 @@ export function ActivityRow({ item, showRaw = false }: { item: Activity; showRaw
   );
 
   return (
-    <div className={`activity-row kind-${item.activityKind} is-${item.status}`}>
+    <div
+      className={`activity-row kind-${item.activityKind} is-${item.status}${hardBlocked ? " is-hard-blocked" : ""}`}
+    >
       <span className="activity-status" aria-hidden="true">
         {statusIcon}
       </span>
@@ -92,6 +130,20 @@ export function ActivityRow({ item, showRaw = false }: { item: Activity; showRaw
       ) : null}
       {detailVisible && item.detail !== undefined ? (
         <StructuredToolDetail detail={item.detail} activityKind={item.activityKind} />
+      ) : null}
+      {item.approval ? (
+        <div className="activity-inline-approval">
+          <ApprovalCard
+            item={{
+              id: `approval:${item.approval.approvalId}`,
+              kind: "approval",
+              turnId: item.turnId,
+              ...item.approval,
+            }}
+            onApproval={onApproval}
+            available={approvalAvailable}
+          />
+        </div>
       ) : null}
     </div>
   );

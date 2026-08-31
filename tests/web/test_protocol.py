@@ -129,6 +129,11 @@ def test_view_event_serializes_without_secret_fields() -> None:
         ("steps.get", {}, "steps.get"),
         ("steps.set", {"value": 40}, "steps.set"),
         ("steps.reset", {}, "steps.reset"),
+        (
+            "verification.set",
+            {"commands": ["python -m pytest -q"]},
+            "verification.set",
+        ),
         ("permissions.get", {}, "permissions.get"),
         ("permissions.set", {"mode": "auto"}, "permissions.set"),
         ("plan.get", {}, "plan.get"),
@@ -173,5 +178,21 @@ def test_steps_set_rejects_values_below_twelve() -> None:
                 "type": "steps.set",
                 "request_id": "steps-low",
                 "value": 11,
+            }
+        )
+
+
+@pytest.mark.parametrize(
+    "commands",
+    [[""], ["python -m pytest\nRemove-Item -Recurse ."], ["x" * 20_001]],
+)
+def test_verification_set_rejects_malformed_commands(commands: list[str]) -> None:
+    with pytest.raises(ValidationError):
+        parse_client_request(
+            {
+                "protocol_version": 2,
+                "type": "verification.set",
+                "request_id": "verification-invalid",
+                "commands": commands,
             }
         )

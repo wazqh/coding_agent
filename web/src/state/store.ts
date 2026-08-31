@@ -29,6 +29,7 @@ export interface ChangeSummary {
   path: string;
   kind?: "created" | "modified";
   reversible?: boolean;
+  reviewStatus?: "pending" | "accepted" | "conflicted";
   additions: number;
   deletions: number;
   diff: string;
@@ -75,7 +76,13 @@ export interface RuntimeState {
     maximum?: number;
   };
   model?: { provider?: string; id?: string };
-  context?: { estimated_tokens?: number; context_window?: number; percent_used?: number };
+  context?: {
+    estimated_tokens?: number;
+    context_window?: number;
+    percent_used?: number;
+    breakdown?: Record<string, number>;
+  };
+  verification?: { commands?: string[] };
   resources?: Record<string, unknown>;
   plan?: Array<Record<string, unknown>>;
 }
@@ -101,6 +108,16 @@ export interface SkillsState {
   diagnostics?: string[];
 }
 
+export interface OperationApproval {
+  approvalId: string;
+  action: string;
+  subject: string;
+  summary: string;
+  diff?: string;
+  resolved: boolean;
+  decision?: string;
+}
+
 export type TimelineItem =
   | { id: string; kind: "user"; content: string }
   | { id: string; kind: "assistant"; content: string; streaming: boolean }
@@ -109,18 +126,21 @@ export type TimelineItem =
       kind: "activity";
       turnId?: string | null;
       activityId: string;
+      operationId?: string;
       activityKind: string;
       title: string;
       summary: string;
       status: string;
       count?: number;
       detail?: unknown;
+      approval?: OperationApproval;
     }
   | {
       id: string;
       kind: "approval";
       turnId?: string | null;
       approvalId: string;
+      operationId?: string;
       action: string;
       subject: string;
       summary: string;
@@ -224,11 +244,18 @@ export function createAgentStore() {
       set((state) => {
         if (connection !== "disconnected" || !state.busy) return { connection };
         const turnId = state.activeTurnId;
-        const items = state.items.map((item) =>
-          item.kind === "approval" && !item.resolved
-            ? { ...item, resolved: true, decision: "cancelled" }
-            : item,
-        );
+        const items = state.items.map((item) => {
+          if (item.kind === "approval" && !item.resolved) {
+            return { ...item, resolved: true, decision: "cancelled" };
+          }
+          if (item.kind === "activity" && item.approval && !item.approval.resolved) {
+            return {
+              ...item,
+              approval: { ...item.approval, resolved: true, decision: "cancelled" },
+            };
+          }
+          return item;
+        });
         return {
           connection,
           busy: false,
@@ -396,6 +423,7 @@ export function createAgentStore() {
             kind: "activity",
             turnId: event.turn_id,
             activityId,
+            operationId: text(event.data.operation_id) || undefined,
             activityKind: text(event.data.kind, "tool"),
             title: text(event.data.title, "Agent 操作"),
             summary: text(event.data.summary),
@@ -408,12 +436,36 @@ export function createAgentStore() {
           );
           if (index < 0) return { ...base, items: [...state.items, item] };
           const items = [...state.items];
-          items[index] = item;
+          const current = items[index];
+          items[index] =
+            current.kind === "activity" && current.approval
+              ? { ...item, approval: current.approval }
+              : item;
           return { ...base, items };
         }
 
         if (event.type === "approval.requested") {
           const request = record(event.data.request);
+          const operationId = text(event.data.operation_id);
+          const approval: OperationApproval = {
+            approvalId: text(event.data.approval_id),
+            action: text(request.action),
+            subject: text(request.subject),
+            summary: text(request.summary),
+            ...(typeof request.diff === "string" ? { diff: request.diff } : {}),
+            resolved: false,
+          };
+          const operationIndex = operationId
+            ? state.items.findIndex(
+                (item) => item.kind === "activity" && item.operationId === operationId,
+              )
+            : -1;
+          if (operationIndex >= 0) {
+            const items = [...state.items];
+            const operation = items[operationIndex];
+            if (operation.kind === "activity") items[operationIndex] = { ...operation, approval };
+            return { ...base, items };
+          }
           return {
             ...base,
             items: [
@@ -423,6 +475,7 @@ export function createAgentStore() {
                 kind: "approval",
                 turnId: event.turn_id,
                 approvalId: text(event.data.approval_id),
+                operationId: operationId || undefined,
                 action: text(request.action),
                 subject: text(request.subject),
                 summary: text(request.summary),
@@ -437,11 +490,22 @@ export function createAgentStore() {
           const approvalId = text(event.data.approval_id);
           return {
             ...base,
-            items: state.items.map((item) =>
-              item.kind === "approval" && item.approvalId === approvalId
-                ? { ...item, resolved: true, decision: text(event.data.decision) }
-                : item,
-            ),
+            items: state.items.map((item) => {
+              if (item.kind === "approval" && item.approvalId === approvalId) {
+                return { ...item, resolved: true, decision: text(event.data.decision) };
+              }
+              if (item.kind === "activity" && item.approval?.approvalId === approvalId) {
+                return {
+                  ...item,
+                  approval: {
+                    ...item.approval,
+                    resolved: true,
+                    decision: text(event.data.decision),
+                  },
+                };
+              }
+              return item;
+            }),
           };
         }
 
@@ -591,6 +655,7 @@ export function createAgentStore() {
             path: text(event.data.path),
             kind: text(event.data.kind) === "created" ? "created" : "modified",
             reversible: event.data.reversible !== false,
+            reviewStatus: text(event.data.review_status, "pending") as ChangeSummary["reviewStatus"],
             additions: Number(event.data.additions ?? 0),
             deletions: Number(event.data.deletions ?? 0),
             diff: text(event.data.diff),
@@ -611,6 +676,7 @@ export function createAgentStore() {
                   path: text(item.path),
                   kind: text(item.kind) === "created" ? "created" as const : "modified" as const,
                   reversible: item.reversible === true,
+                  reviewStatus: text(item.review_status, "pending") as ChangeSummary["reviewStatus"],
                   additions: Number(item.additions ?? 0),
                   deletions: Number(item.deletions ?? 0),
                   diff: text(item.diff),

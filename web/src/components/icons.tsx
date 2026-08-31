@@ -116,3 +116,12 @@ export function InspectorIcon(props: IconProps) {
   );
 }
 
+export function ShieldIcon(props: IconProps) {
+  return (
+    <svg {...base} {...props}>
+      <path d="M12 3.5 19 6v5.5c0 4.4-2.7 7.3-7 9-4.3-1.7-7-4.6-7-9V6z" />
+      <path d="m9.2 12 1.8 1.8 3.8-4" />
+    </svg>
+  );
+}
+

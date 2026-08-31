@@ -38,6 +38,13 @@ def _management(tmp_path: Path) -> tuple[RuntimeManagement, SimpleNamespace]:
         skills=SimpleNamespace(catalog=lambda: [{"name": "review"}], active={"review"}),
         model_manager=None,
         sessions=SessionStore(data_dir),
+        verification_commands=(),
+        context_breakdown=lambda: {
+            "system_and_project": 1024,
+            "conversation_and_results": 4096,
+            "tool_schemas": 2048,
+            "other": 1024,
+        },
     )
     controller.sessions.append(
         controller.session_id,
@@ -77,6 +84,7 @@ def test_runtime_snapshot_reports_tui_status_without_secrets(tmp_path: Path) -> 
     assert snapshot.steps.maximum == 100
     assert snapshot.steps.current == 24
     assert snapshot.steps.overridden is False
+    assert snapshot.verification.commands == ()
     assert snapshot.context.percent_used == 25
     assert snapshot.resources.memory.count == 2
     assert snapshot.resources.skills.active == ("review",)
@@ -113,6 +121,30 @@ def test_steps_are_project_scoped_and_reset_to_configured_default(tmp_path: Path
     assert reset.steps.current == 24
     assert reset.steps.overridden is False
     assert management.workspace_settings.load().max_steps is None
+
+
+def test_verification_commands_are_project_scoped_and_update_the_active_controller(
+    tmp_path: Path,
+) -> None:
+    management, controller = _management(tmp_path)
+
+    changed = management.set_verification_commands(
+        ["python -m pytest -q", "python -m ruff check ."]
+    )
+
+    assert changed.verification.commands == (
+        "python -m pytest -q",
+        "python -m ruff check .",
+    )
+    assert controller.verification_commands == changed.verification.commands
+    assert management.workspace_settings.load().verification.commands == list(
+        changed.verification.commands
+    )
+
+    reset = management.reset_verification_commands()
+
+    assert reset.verification.commands == ()
+    assert controller.verification_commands == ()
 
 
 def test_runtime_lifecycle_is_explicit_and_sanitized(tmp_path: Path) -> None:

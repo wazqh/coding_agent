@@ -11,6 +11,7 @@ from typing import Any
 from uuid import uuid4
 
 from coding_agent.branding import PRODUCT_NAME
+from coding_agent.change_ledger import CHANGE_RECORD_TYPE, restore_changes, serialize_change
 from coding_agent.config import Settings
 from coding_agent.context import ContextManager, estimate_request_tokens
 from coding_agent.events import AgentEvent, AgentState, EventKind, ToolCall
@@ -22,6 +23,7 @@ from coding_agent.safety.approval import ApprovalPolicy
 from coding_agent.safety.paths import WorkspacePaths
 from coding_agent.session import SessionError, SessionStore
 from coding_agent.skills import SkillError, SkillRegistry
+from coding_agent.tokens import count_tokens
 from coding_agent.tools.base import EventSink, ToolContext, WorkingState
 from coding_agent.tools.registry import ToolRegistry
 
@@ -52,10 +54,12 @@ class AgentController:
         event_sink: EventSink | None = None,
         monotonic: Callable[[], float] = time.monotonic,
         model_manager: ModelManager | None = None,
+        verification_commands: list[str] | tuple[str, ...] = (),
     ) -> None:
         self.settings = settings
         self.model = model
         self.model_manager = model_manager
+        self.verification_commands = tuple(verification_commands)
         self.tools = tools
         self.sessions = sessions
         self.approval = approval
@@ -81,6 +85,20 @@ class AgentController:
             self._messages_for_model(self.conversation), self.tools.schemas()
         )
 
+    def context_breakdown(self) -> dict[str, int]:
+        """Return an approximate token split without exposing request contents."""
+
+        system = count_tokens(self._last_system_prompt) if self._last_system_prompt else 0
+        history = count_tokens(json.dumps(self.conversation, ensure_ascii=False))
+        tool_schemas = count_tokens(json.dumps(self.tools.schemas(), ensure_ascii=False))
+        measured = system + history + tool_schemas
+        return {
+            "system_and_project": system,
+            "conversation_and_results": history,
+            "tool_schemas": tool_schemas,
+            "other": max(0, self.last_context_tokens - measured),
+        }
+
     def _restore(self, session_id: str) -> None:
         records = self.sessions.replay(session_id)
         metadata: dict[str, Any] = next(
@@ -93,6 +111,11 @@ class AgentController:
         ):
             raise SessionError("session belongs to a different workspace")
         self.conversation = []
+        self.working.changes = restore_changes(records)
+        self.working.diffs = [change.diff for change in self.working.changes]
+        self.working.modified_files = {
+            change.path: change.after_sha256 for change in self.working.changes
+        }
         for record in records:
             if record["type"] == "message" and isinstance(record["data"], dict):
                 self.conversation.append(record["data"])
@@ -406,10 +429,12 @@ class AgentController:
                     data={"tokens_before": before, "summary": summary},
                 )
         self._append_message({"role": "user", "content": user_input})
+        initial_change_ids = {change.id for change in self.working.changes}
         steps = 0
         last_text = ""
         failed_signature: str | None = None
         failed_count = 0
+        verification_failures = 0
 
         try:
             while steps < self.settings.agent.max_steps:
@@ -494,19 +519,154 @@ class AgentController:
                                 "google": {"thought_signature": call.thought_signature}
                             }
                         assistant["tool_calls"].append(call_payload)
-                self._append_message(assistant)
                 if not tool_calls:
-                    if content.strip():
+                    if not content.strip():
+                        self._append_message(assistant)
                         return self._finish(
-                            AgentState.COMPLETED, turn_id, content, steps, "assistant completed"
+                            AgentState.FAILED,
+                            turn_id,
+                            content,
+                            steps,
+                            "model returned neither text nor tool calls",
                         )
-                    return self._finish(
-                        AgentState.FAILED,
-                        turn_id,
-                        content,
-                        steps,
-                        "model returned neither text nor tool calls",
+                    changed_this_turn = any(
+                        change.id not in initial_change_ids for change in self.working.changes
                     )
+                    verification_failed = False
+                    if changed_this_turn and self.verification_commands:
+                        context = self._tool_context(turn_id, cancel_event)
+                        for command in self.verification_commands:
+                            if steps >= self.settings.agent.max_steps:
+                                self._append_message(assistant)
+                                return self._finish(
+                                    AgentState.FAILED,
+                                    turn_id,
+                                    content,
+                                    steps,
+                                    "verification could not run within the tool step budget",
+                                )
+                            operation_id = f"verification-{uuid4().hex[:16]}"
+                            arguments = {"command": command}
+                            self._append_message(
+                                {
+                                    "role": "assistant",
+                                    "content": None,
+                                    "tool_calls": [
+                                        {
+                                            "id": operation_id,
+                                            "type": "function",
+                                            "function": {
+                                                "name": "run_command",
+                                                "arguments": json.dumps(
+                                                    arguments,
+                                                    ensure_ascii=False,
+                                                ),
+                                            },
+                                        }
+                                    ],
+                                }
+                            )
+                            steps += 1
+                            self._set_state(
+                                AgentState.TOOL_PENDING,
+                                turn_id,
+                                tool="run_command",
+                                step=steps,
+                            )
+                            self._emit(
+                                EventKind.TOOL_CALL,
+                                turn_id=turn_id,
+                                data={
+                                    "id": operation_id,
+                                    "name": "run_command",
+                                    "arguments": arguments,
+                                    "verification": True,
+                                },
+                            )
+                            self._set_state(
+                                AgentState.EXECUTING,
+                                turn_id,
+                                tool="run_command",
+                                step=steps,
+                            )
+                            context.operation_id = operation_id
+                            result = self.tools.execute("run_command", arguments, context)
+                            self._append_message(
+                                {
+                                    "role": "tool",
+                                    "tool_call_id": operation_id,
+                                    "name": "run_command",
+                                    "content": result.model_dump_json(),
+                                }
+                            )
+                            self._set_state(
+                                AgentState.OBSERVING,
+                                turn_id,
+                                tool="run_command",
+                                step=steps,
+                            )
+                            self._emit(
+                                EventKind.TOOL_RESULT,
+                                turn_id=turn_id,
+                                data={
+                                    "id": operation_id,
+                                    "name": "run_command",
+                                    "result": result.model_dump(),
+                                    "verification": True,
+                                },
+                            )
+                            if cancel_event is not None and cancel_event.is_set():
+                                return self._finish(
+                                    AgentState.CANCELLED,
+                                    turn_id,
+                                    content,
+                                    steps,
+                                    "cancelled by Esc",
+                                    130,
+                                )
+                            if result.code == "APPROVAL_DENIED":
+                                return self._finish(
+                                    AgentState.FAILED,
+                                    turn_id,
+                                    content,
+                                    steps,
+                                    "verification approval was denied",
+                                    exit_code=3,
+                                )
+                            if not result.ok:
+                                verification_failures += 1
+                                if verification_failures >= 3:
+                                    self._append_message(assistant)
+                                    return self._finish(
+                                        AgentState.FAILED,
+                                        turn_id,
+                                        content,
+                                        steps,
+                                        "verification failed after two repair attempts",
+                                    )
+                                verification_failed = True
+                                self._emit(
+                                    EventKind.WARNING,
+                                    turn_id=turn_id,
+                                    data={
+                                        "code": "VERIFICATION_FAILED",
+                                        "message": (
+                                            "deterministic verification failed; "
+                                            "the result was returned for repair"
+                                        ),
+                                        "attempt": verification_failures,
+                                        "maximum_repairs": 2,
+                                    },
+                                )
+                                break
+                    if verification_failed:
+                        continue
+                    self._append_message(assistant)
+                    return self._finish(
+                        AgentState.COMPLETED, turn_id, content, steps, "assistant completed"
+                    )
+
+                self._append_message(assistant)
 
                 context = self._tool_context(turn_id, cancel_event)
                 for index, call in enumerate(tool_calls):
@@ -541,7 +701,20 @@ class AgentController:
                         data={"id": call.id, "name": call.name, "arguments": call.arguments},
                     )
                     self._set_state(AgentState.EXECUTING, turn_id, tool=call.name, step=steps)
+                    context.operation_id = call.id
                     result = self.tools.execute(call.name, call.arguments, context)
+                    change_id = result.data.get("change_id")
+                    if isinstance(change_id, str):
+                        change = next(
+                            (item for item in self.working.changes if item.id == change_id),
+                            None,
+                        )
+                        if change is not None:
+                            self.sessions.append(
+                                self.session_id,
+                                CHANGE_RECORD_TYPE,
+                                serialize_change(change),
+                            )
                     self.working.recent_calls.append(
                         {
                             "name": call.name,
@@ -669,4 +842,6 @@ class AgentController:
             "termination",
             {"status": status.value, "reason": reason, "exit_code": code},
         )
+        if status is AgentState.COMPLETED:
+            self.sessions.ensure_title(self.session_id, self.working.goal)
         return RunResult(status, code, self.session_id, content, steps, reason)

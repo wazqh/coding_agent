@@ -21,21 +21,79 @@ class CommandClassification:
     allowed: bool
     approval_required: bool
     reason: str
+    rule_id: str | None = None
+    risk_label: str | None = None
+    matched_text: str | None = None
+    guidance: str | None = None
+
+
+@dataclass(frozen=True)
+class CommandSafetyRule:
+    pattern: re.Pattern[str]
+    rule_id: str
+    risk_label: str
+    guidance: str
 
 
 class CommandPolicy:
     _forbidden = (
-        re.compile(r"\bgit\s+reset\b[^\r\n]*--hard", re.IGNORECASE),
-        re.compile(r"\bgit\s+clean\b[^\r\n]*(?:-\w*f\w*|--force)", re.IGNORECASE),
-        re.compile(r"\b(?:rm|rmdir)\b[^\r\n]*(?:-[^\s]*r|--recursive)", re.IGNORECASE),
-        re.compile(r"\bremove-item\b[^\r\n]*-recurse", re.IGNORECASE),
-        re.compile(r"\b(?:del|rd)\b[^\r\n]*/s", re.IGNORECASE),
-        re.compile(r"\b(?:mkfs(?:\.\w+)?|diskpart|format)\b", re.IGNORECASE),
-        re.compile(
-            r"\b(?:shutdown|reboot|halt|poweroff|stop-computer|restart-computer)\b", re.IGNORECASE
+        CommandSafetyRule(
+            re.compile(r"\bgit\s+reset\b[^\r\n]*--hard", re.IGNORECASE),
+            "git-reset-hard",
+            "破坏性 Git 重置",
+            "先检查 git status 和 git diff，使用可保留工作区改动的恢复方式。",
         ),
-        re.compile(r"\bdd\s+[^\r\n]*\bof=", re.IGNORECASE),
-        re.compile(r":\(\)\s*\{\s*:\|:&\s*\}", re.IGNORECASE),
+        CommandSafetyRule(
+            re.compile(r"\bgit\s+clean\b[^\r\n]*(?:-\w*f\w*|--force)", re.IGNORECASE),
+            "git-clean-force",
+            "强制清理 Git 工作区",
+            "先查看 git status 和 git clean -nd，再让用户确认精确目标。",
+        ),
+        CommandSafetyRule(
+            re.compile(r"\b(?:rm|rmdir)\b[^\r\n]*(?:-[^\s]*r|--recursive)", re.IGNORECASE),
+            "recursive-delete",
+            "递归删除文件",
+            "请限定到明确的工作区目标，并优先使用可恢复的删除方式。",
+        ),
+        CommandSafetyRule(
+            re.compile(r"\bremove-item\b[^\r\n]*-recurse", re.IGNORECASE),
+            "recursive-delete",
+            "递归删除文件",
+            "请限定到明确的工作区目标，并优先使用可恢复的删除方式。",
+        ),
+        CommandSafetyRule(
+            re.compile(r"\b(?:del|rd)\b[^\r\n]*/s", re.IGNORECASE),
+            "recursive-delete",
+            "递归删除文件",
+            "请限定到明确的工作区目标，并优先使用可恢复的删除方式。",
+        ),
+        CommandSafetyRule(
+            re.compile(r"\b(?:mkfs(?:\.\w+)?|diskpart|format)\b", re.IGNORECASE),
+            "disk-format",
+            "磁盘格式化操作",
+            "此类操作可能破坏磁盘数据，请改用只读检查或在系统工具中人工处理。",
+        ),
+        CommandSafetyRule(
+            re.compile(
+                r"\b(?:shutdown|reboot|halt|poweroff|stop-computer|restart-computer)\b",
+                re.IGNORECASE,
+            ),
+            "system-power",
+            "系统电源操作",
+            "请在 Agent 外部确认运行状态后，由用户直接执行电源操作。",
+        ),
+        CommandSafetyRule(
+            re.compile(r"\bdd\s+[^\r\n]*\bof=", re.IGNORECASE),
+            "direct-disk-write",
+            "直接写入设备",
+            "不要让 Agent 直接写入设备，请改用可审阅、可回滚的文件级操作。",
+        ),
+        CommandSafetyRule(
+            re.compile(r":\(\)\s*\{\s*:\|:&\s*\}", re.IGNORECASE),
+            "fork-bomb",
+            "进程耗尽攻击",
+            "该命令会耗尽系统资源，必须移除。",
+        ),
     )
     _read_only = (
         re.compile(r"^(?:pwd|ls|dir|tree|rg|grep|findstr|where|which)(?:\s|$)", re.IGNORECASE),
@@ -48,10 +106,16 @@ class CommandPolicy:
         normalized = command.strip()
         if not normalized or "\x00" in normalized or "\n" in normalized or "\r" in normalized:
             return CommandClassification(False, False, "empty, NUL, or multiline command")
-        for pattern in self._forbidden:
-            if pattern.search(normalized):
+        for rule in self._forbidden:
+            if match := rule.pattern.search(normalized):
                 return CommandClassification(
-                    False, False, "command matches a destructive safety rule"
+                    False,
+                    False,
+                    "command matches a destructive safety rule",
+                    rule_id=rule.rule_id,
+                    risk_label=rule.risk_label,
+                    matched_text=match.group(0),
+                    guidance=rule.guidance,
                 )
         has_operators = bool(re.search(r"[;&|<>`]", normalized))
         if not has_operators and any(pattern.match(normalized) for pattern in self._read_only):
