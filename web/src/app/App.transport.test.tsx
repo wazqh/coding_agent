@@ -190,7 +190,7 @@ test("confirms a maximum-step update after the runtime snapshot applies it", asy
     .toHaveTextContent("已保存，下一轮任务生效");
 });
 
-test("configures project verification commands from the run inspector", async () => {
+test("separates command history from verification settings and saves its mode", async () => {
   const user = userEvent.setup();
   const transport = new FakeTransport();
   render(<App {...baseProps} transport={transport} store={createAgentStore()} />);
@@ -223,21 +223,35 @@ test("configures project verification commands from the run inspector", async ()
           model: { id: "gemini-flash" },
           context: { estimated_tokens: 0, context_window: 100000, percent_used: 0 },
           steps: { current: 12, minimum: 12, maximum: 100, overridden: false },
-          verification: { commands: ["python -m pytest -q"] },
+          verification: {
+            enabled: true,
+            agent_tdd: true,
+            commands: ["python -m pytest -q"],
+            suggested_commands: ["python -m pytest -q", "python -m ruff check ."],
+          },
         },
       },
     });
   });
 
+  expect(screen.getByRole("tab", { name: "命令记录" })).toBeInTheDocument();
+  await user.click(screen.getByRole("tab", { name: "验证" }));
+  expect(screen.getByRole("switch", { name: "自动验证" })).toBeChecked();
+  expect(screen.getByRole("checkbox", { name: "Agent TDD" })).toBeChecked();
   const input = screen.getByRole("textbox", { name: "项目验证命令" });
   expect(input).toHaveValue("python -m pytest -q");
+  expect(screen.getByRole("button", { name: "添加建议命令 python -m ruff check ." }))
+    .toBeInTheDocument();
   expect(screen.queryByRole("spinbutton", { name: "最大步骤" })).not.toBeInTheDocument();
   expect(screen.queryByRole("combobox", { name: "当前模型" })).not.toBeInTheDocument();
   await user.clear(input);
-  await user.type(input, "python -m ruff check .{Enter}python -m pytest -q");
-  await user.click(screen.getByRole("button", { name: "保存验证规则" }));
+  await user.click(screen.getByRole("button", { name: "添加建议命令 python -m ruff check ." }));
+  await user.type(input, "{Enter}python -m pytest -q");
+  await user.click(screen.getByRole("button", { name: "保存验证设置" }));
 
   expect(transport.request).toHaveBeenCalledWith("verification.set", {
+    enabled: true,
+    agent_tdd: true,
     commands: ["python -m ruff check .", "python -m pytest -q"],
   });
   act(() => {
@@ -256,13 +270,66 @@ test("configures project verification commands from the run inspector", async ()
           context: { estimated_tokens: 0, context_window: 100000, percent_used: 0 },
           steps: { current: 12, minimum: 12, maximum: 100, overridden: false },
           verification: {
+            enabled: true,
+            agent_tdd: true,
             commands: ["python -m ruff check .", "python -m pytest -q"],
           },
         },
       },
     });
   });
-  expect(await screen.findByRole("status")).toHaveTextContent("验证规则已保存");
+  expect(await screen.findByRole("status")).toHaveTextContent("自动验证已更新");
+});
+
+test("allows choosing Agent TDD before a verification command is configured", async () => {
+  const user = userEvent.setup();
+  const transport = new FakeTransport();
+  render(<App {...baseProps} transport={transport} store={createAgentStore()} />);
+  await waitFor(() => expect(transport.connect).toHaveBeenCalledOnce());
+
+  act(() => {
+    transport.emit({
+      protocol_version: 2,
+      type: "snapshot",
+      seq: 1,
+      session_id: "a".repeat(24),
+      turn_id: null,
+      data: { busy: false, model: "gemini-flash", permissions: "prompt" },
+    });
+  });
+  await user.click(screen.getByRole("button", { name: "任务检查器" }));
+  await user.click(screen.getByRole("tab", { name: "运行" }));
+  act(() => {
+    transport.emit({
+      protocol_version: 2,
+      type: "runtime.updated",
+      seq: 2,
+      session_id: "a".repeat(24),
+      turn_id: null,
+      data: {
+        runtime: {
+          workspace_name: "coding_agent",
+          workspace: "D:\\codes\\coding_agent",
+          permissions: "prompt",
+          model: { id: "gemini-flash" },
+          context: { estimated_tokens: 0, context_window: 100000, percent_used: 0 },
+          steps: { current: 12, minimum: 12, maximum: 100, overridden: false },
+          verification: {
+            enabled: true,
+            agent_tdd: false,
+            commands: [],
+            suggested_commands: ["python -m pytest -q"],
+          },
+        },
+      },
+    });
+  });
+
+  await user.click(screen.getByRole("tab", { name: "验证" }));
+  const tdd = screen.getByRole("checkbox", { name: "Agent TDD" });
+  expect(tdd).toBeEnabled();
+  await user.click(tdd);
+  expect(tdd).toBeChecked();
 });
 
 test("disables input after disconnect and offers reconnection", async () => {

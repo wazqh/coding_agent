@@ -9,6 +9,7 @@ import { ContextDrawer } from "../components/ContextDrawer";
 import type { ModelUpdateInput } from "../components/ModelManager";
 import { SessionRail } from "../components/SessionRail";
 import { Timeline } from "../components/Timeline";
+import { buildVerificationRepairTask } from "../components/verificationEvidence";
 import { WorkspaceHeader } from "../components/WorkspaceHeader";
 import type { ApprovalDecision, PermissionMode, Transport } from "../protocol/types";
 import { agentStore, type AgentState } from "../state/store";
@@ -47,6 +48,7 @@ export function App({
   const [drawerView, setDrawerView] = useState<
     "changes" | "run" | "settings" | "resources" | "context"
   >("changes");
+  const [drawerRunPanel, setDrawerRunPanel] = useState<"commands" | "verification">("commands");
   const [helpOpen, setHelpOpen] = useState(false);
   const [showRaw, setShowRaw] = useState(false);
   const [commandFeedback, setCommandFeedback] = useState("");
@@ -545,6 +547,15 @@ export function App({
               onApproval={resolveApproval}
               approvalAvailable={ready}
               showRaw={showRaw}
+              onVerify={(turnId) => {
+                setDrawerRunPanel("verification");
+                setDrawerView("run");
+                setDrawerOpen(true);
+                transport?.request("verification.run", { turn_id: turnId });
+              }}
+              onRepair={(turnId) => {
+                executeInput(buildVerificationRepairTask(timelineItems, turnId));
+              }}
             />
           ) : (
             <div className="empty-conversation">
@@ -621,8 +632,9 @@ export function App({
           onReviewAll={(decision) => {
             transport?.request("changes.review", { decision });
           }}
-          key={drawerView}
+          key={`${drawerView}:${drawerRunPanel}`}
           initialTab={drawerView}
+          initialRunPanel={drawerRunPanel}
           openModelManager={modelSetupOpen}
           onTabChange={setDrawerView}
           busy={effectiveBusy}
@@ -687,8 +699,12 @@ export function App({
           onPermissionChange={(mode) => transport?.request("permissions.set", { mode })}
           onStepsChange={(value) => transport?.request("steps.set", { value }) ?? false}
           onStepsReset={() => transport?.request("steps.reset") ?? false}
-          onVerificationChange={(commands) =>
-            transport?.request("verification.set", { commands }) ?? false
+          onVerificationChange={({ enabled, agentTdd, commands }) =>
+            transport?.request("verification.set", {
+              enabled,
+              agent_tdd: agentTdd,
+              commands,
+            }) ?? false
           }
           onMemoryList={() => transport?.request("memory.list")}
           onMemoryToggle={(enabled) => transport?.request("memory.toggle", { enabled })}

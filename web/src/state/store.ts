@@ -82,7 +82,12 @@ export interface RuntimeState {
     percent_used?: number;
     breakdown?: Record<string, number>;
   };
-  verification?: { commands?: string[] };
+  verification?: {
+    enabled?: boolean;
+    agent_tdd?: boolean;
+    commands?: string[];
+    suggested_commands?: string[];
+  };
   resources?: Record<string, unknown>;
   plan?: Array<Record<string, unknown>>;
 }
@@ -565,6 +570,41 @@ export function createAgentStore() {
               step: Number(event.data.step ?? 0),
               ...(typeof event.data.tool === "string" ? { tool: event.data.tool } : {}),
             },
+          };
+        }
+
+        if (event.type === "verification.started") {
+          return {
+            ...base,
+            busy: true,
+            activeTurnId: event.turn_id,
+            progress: { status: "validating", step: 0 },
+            items: state.items.map((item) =>
+              item.kind === "completion" && item.turnId === event.turn_id
+                ? { ...item, validationStatus: "incomplete" as const }
+                : item,
+            ),
+          };
+        }
+
+        if (event.type === "verification.finished") {
+          const status = text(event.data.status);
+          const validation =
+            status === "passed"
+              ? ("passed" as const)
+              : status === "failed"
+                ? ("failed" as const)
+                : ("not_run" as const);
+          return {
+            ...base,
+            busy: false,
+            activeTurnId: null,
+            progress: null,
+            items: state.items.map((item) =>
+              item.kind === "completion" && item.turnId === event.turn_id
+                ? { ...item, validationStatus: validation }
+                : item,
+            ),
           };
         }
 

@@ -152,6 +152,46 @@ def test_verification_commands_are_project_scoped_and_update_the_active_controll
     assert controller.verification_commands == ()
 
 
+def test_verification_mode_updates_runtime_and_controller(tmp_path: Path) -> None:
+    management, controller = _management(tmp_path)
+
+    changed = management.set_verification(
+        enabled=True,
+        agent_tdd=True,
+        commands=["python -m pytest -q"],
+    )
+
+    assert changed.verification.enabled is True
+    assert changed.verification.agent_tdd is True
+    assert changed.verification.commands == ("python -m pytest -q",)
+    assert controller.verification_enabled is True
+    assert controller.verification_agent_tdd is True
+
+
+def test_runtime_suggests_verification_commands_from_project_markers(tmp_path: Path) -> None:
+    (tmp_path / "pyproject.toml").write_text(
+        "[tool.pytest.ini_options]\n[tool.ruff]\n[tool.mypy]\n",
+        encoding="utf-8",
+    )
+    web = tmp_path / "web"
+    web.mkdir()
+    (web / "package.json").write_text(
+        '{"scripts":{"test":"vitest run","build":"vite build","dev":"vite"}}',
+        encoding="utf-8",
+    )
+    management, _controller = _management(tmp_path)
+
+    snapshot = management.snapshot()
+
+    assert snapshot.verification.suggested_commands == (
+        "python -m pytest -q",
+        "python -m ruff check .",
+        "python -m mypy",
+        'npm --prefix "web" test',
+        'npm --prefix "web" run build',
+    )
+
+
 def test_runtime_lifecycle_is_explicit_and_sanitized(tmp_path: Path) -> None:
     management, _ = _management(tmp_path)
 

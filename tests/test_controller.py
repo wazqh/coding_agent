@@ -45,6 +45,8 @@ def make_controller(
     monotonic: Callable[[], float] | None = None,
     tools: ToolRegistry | None = None,
     verification_commands: list[str] | None = None,
+    verification_enabled: bool | None = None,
+    verification_agent_tdd: bool = False,
 ) -> AgentController:
     sessions = SessionStore(settings.data_dir)
     return AgentController(
@@ -56,7 +58,58 @@ def make_controller(
         session_id=session_id,
         event_sink=events.append if events is not None else None,
         verification_commands=verification_commands or [],
+        verification_enabled=verification_enabled,
+        verification_agent_tdd=verification_agent_tdd,
         **({"monotonic": monotonic} if monotonic is not None else {}),
+    )
+
+
+def test_agent_tdd_mode_only_guides_the_agent_while_execution_stays_in_tools(
+    settings: Settings,
+) -> None:
+    model = FakeModel([text_response("Tests are ready.")])
+    controller = make_controller(
+        settings,
+        model,
+        verification_enabled=True,
+        verification_agent_tdd=True,
+    )
+
+    controller.run_turn("add a regression test")
+
+    system_prompt = str(model.requests[0][0][0]["content"])
+    assert "write or update focused tests" in system_prompt
+    assert "execute test commands through the provided tools" in system_prompt
+    assert "do not simulate or claim command execution" in system_prompt
+
+
+def test_manual_verification_runs_configured_commands_without_calling_the_model(
+    settings: Settings,
+) -> None:
+    verifier = FakeVerificationTool(
+        [ToolResult(ok=True, code="OK", summary="24 passed", data={"exit_code": 0})]
+    )
+    model = FakeModel([])
+    events: list = []
+    controller = make_controller(
+        settings,
+        model,
+        tools=verification_registry(verifier),
+        events=events,
+        verification_commands=["python -m pytest -q"],
+        verification_enabled=False,
+    )
+
+    result = controller.run_verification("turn-to-verify")
+
+    assert result.status == "passed"
+    assert verifier.commands == ["python -m pytest -q"]
+    assert model.requests == []
+    assert any(
+        event.kind is EventKind.TOOL_RESULT
+        and event.turn_id == "turn-to-verify"
+        and event.data.get("verification") is True
+        for event in events
     )
 
 
@@ -351,9 +404,11 @@ def test_failed_verification_is_fed_back_to_the_model_before_a_bounded_repair(
             text_response("Fixed and verified."),
         ]
     )
+    events: list = []
     controller = make_controller(
         settings,
         model,
+        events=events,
         tools=verification_registry(verifier),
         verification_commands=["python -m pytest -q"],
     )
@@ -362,6 +417,11 @@ def test_failed_verification_is_fed_back_to_the_model_before_a_bounded_repair(
 
     assert result.status is AgentState.COMPLETED
     assert verifier.commands == ["python -m pytest -q", "python -m pytest -q"]
+    visible_text = "".join(
+        str(event.data.get("delta", "")) for event in events if event.kind is EventKind.TEXT
+    )
+    assert "Initial implementation." not in visible_text
+    assert visible_text.endswith("Fixed and verified.")
     repair_request = model.requests[2][0]
     verification_call = next(
         message

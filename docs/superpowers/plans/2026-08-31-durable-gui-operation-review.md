@@ -156,14 +156,18 @@
 - Test: `tests/web/test_coordinator.py`
 
 **Interfaces:**
-- Produces: project-scoped `verification.commands: list[str]`
-- Produces: bounded automatic repair loop with at most two retries
+- Produces: project-scoped `verification.enabled`, `verification.agent_tdd`, and
+  `verification.commands: list[str]`
+- Produces: manual deterministic checks plus a bounded automatic repair loop with at most two retries
 
 - [x] Add failing configuration tests for validation, project isolation, and malformed commands.
 - [x] Add failing controller tests for no-change, pass, failure-feedback, retry limit, cancellation, and approval paths.
 - [x] Execute hooks through existing command policy after a changed turn and emit normalized validation events.
 - [x] Feed failures back within the existing step budget and stop after two repair attempts.
-- [x] Render verification settings and latest deterministic results.
+- [x] Split command history from verification controls; render manual/automatic states, Agent TDD
+  guidance, deterministic results, and the evidence-fed repair action.
+- [x] Derive conservative command suggestions from workspace project markers and keep them inert
+  until the user explicitly adds and saves them.
 - [x] Run workspace, controller, and coordinator tests.
 
 ### Task 7: Durable session titles and final verification

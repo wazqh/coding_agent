@@ -83,6 +83,40 @@ def test_workspace_verification_commands_round_trip_and_remain_project_scoped(
     assert not (first / "coding-agent.toml").exists()
 
 
+def test_workspace_verification_mode_round_trips_with_tdd_guidance(tmp_path: Path) -> None:
+    workspace = tmp_path / "repo"
+    workspace.mkdir()
+    store = WorkspaceSettingsStore(data_dir=tmp_path / "data", workspace=workspace)
+
+    store.set_verification(
+        enabled=True,
+        agent_tdd=True,
+        commands=["python -m pytest -q"],
+    )
+
+    verification = store.load().verification
+    assert verification.enabled is True
+    assert verification.agent_tdd is True
+    assert verification.commands == ["python -m pytest -q"]
+
+
+def test_legacy_verification_commands_remain_enabled_after_upgrade(tmp_path: Path) -> None:
+    workspace = tmp_path / "repo"
+    workspace.mkdir()
+    store = WorkspaceSettingsStore(data_dir=tmp_path / "data", workspace=workspace)
+    store.path.parent.mkdir(parents=True)
+    store.path.write_text(
+        '{"verification":{"commands":["python -m pytest -q"]}}',
+        encoding="utf-8",
+    )
+
+    verification = store.load().verification
+
+    assert verification.enabled is True
+    assert verification.agent_tdd is False
+    assert verification.commands == ["python -m pytest -q"]
+
+
 @pytest.mark.parametrize(
     "commands",
     [

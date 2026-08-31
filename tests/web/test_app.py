@@ -21,10 +21,29 @@ from coding_agent.web.protocol import (
     SkillsCreateRequest,
     SkillsDraftRequest,
     StepsSetRequest,
+    VerificationRunRequest,
     VerificationSetRequest,
     ViewEventType,
 )
 from tests.web.test_coordinator import FakeRuntime
+
+
+def test_dispatches_manual_verification_for_an_existing_turn() -> None:
+    coordinator = TurnCoordinator()
+    runtime = FakeRuntime(coordinator.handle_agent_event)
+    coordinator.attach_runtime(runtime)
+
+    _dispatch_request(
+        coordinator,
+        VerificationRunRequest(
+            type="verification.run",
+            request_id="verify-existing",
+            turn_id="turn-existing",
+        ),
+    )
+
+    assert coordinator.wait_until_idle(timeout=1)
+    assert runtime.controllers[0].verified_turns == ["turn-existing"]
 
 
 def _build_client(tmp_path: Path) -> tuple[TestClient, LaunchAuth]:
@@ -263,7 +282,7 @@ def test_dispatches_runtime_status_and_management_mutations() -> None:
         def __init__(self) -> None:
             self.permissions: list[str] = []
             self.steps: list[int] = []
-            self.verification: list[list[str]] = []
+            self.verification: list[dict[str, object]] = []
 
         def snapshot(self) -> Snapshot:
             return Snapshot()
@@ -276,8 +295,16 @@ def test_dispatches_runtime_status_and_management_mutations() -> None:
             self.steps.append(value)
             return Snapshot()
 
-        def set_verification_commands(self, commands: list[str]) -> Snapshot:
-            self.verification.append(commands)
+        def set_verification(
+            self,
+            *,
+            enabled: bool,
+            agent_tdd: bool,
+            commands: list[str],
+        ) -> Snapshot:
+            self.verification.append(
+                {"enabled": enabled, "agent_tdd": agent_tdd, "commands": commands}
+            )
             return Snapshot()
 
     coordinator = TurnCoordinator()
@@ -306,6 +333,8 @@ def test_dispatches_runtime_status_and_management_mutations() -> None:
         VerificationSetRequest(
             type="verification.set",
             request_id="verification",
+            enabled=True,
+            agent_tdd=True,
             commands=["python -m pytest -q"],
         ),
     )
@@ -313,7 +342,13 @@ def test_dispatches_runtime_status_and_management_mutations() -> None:
     events = coordinator.drain_events()
     assert management.permissions == ["auto"]
     assert management.steps == [40]
-    assert management.verification == [["python -m pytest -q"]]
+    assert management.verification == [
+        {
+            "enabled": True,
+            "agent_tdd": True,
+            "commands": ["python -m pytest -q"],
+        }
+    ]
     assert [event.type for event in events] == [
         ViewEventType.RUNTIME_UPDATED,
         ViewEventType.RUNTIME_UPDATED,

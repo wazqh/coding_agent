@@ -55,6 +55,7 @@ exclude = [
   "/.pytest_cache",
   "/.test-runs",
   "/.test-tmp*",
+  "/.tmp-test*",
   "/.tmp",
   "/build",
   "/dist",

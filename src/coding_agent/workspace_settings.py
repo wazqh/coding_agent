@@ -15,6 +15,8 @@ class WorkspaceSettingsError(ValueError):
 
 class VerificationSettings(BaseModel):
     model_config = ConfigDict(extra="forbid")
+    enabled: bool = False
+    agent_tdd: bool = False
     commands: list[str] = Field(default_factory=list, max_length=8)
 
     @field_validator("commands")
@@ -48,6 +50,11 @@ class WorkspaceSettingsStore:
             return WorkspaceSettings()
         try:
             value = json.loads(self.path.read_text(encoding="utf-8"))
+            if isinstance(value, dict) and isinstance(value.get("verification"), dict):
+                verification = value["verification"]
+                if "enabled" not in verification:
+                    verification["enabled"] = bool(verification.get("commands"))
+                verification.setdefault("agent_tdd", False)
             return WorkspaceSettings.model_validate(value)
         except (OSError, json.JSONDecodeError, ValidationError) as exc:
             raise WorkspaceSettingsError(f"cannot read workspace settings: {exc}") from exc
@@ -69,8 +76,26 @@ class WorkspaceSettingsStore:
         self._save(settings)
 
     def set_verification_commands(self, commands: list[str]) -> None:
+        current = self.load().verification
+        self.set_verification(
+            enabled=bool(commands),
+            agent_tdd=current.agent_tdd,
+            commands=commands,
+        )
+
+    def set_verification(
+        self,
+        *,
+        enabled: bool,
+        agent_tdd: bool,
+        commands: list[str],
+    ) -> None:
         try:
-            verification = VerificationSettings(commands=commands)
+            verification = VerificationSettings(
+                enabled=enabled,
+                agent_tdd=agent_tdd,
+                commands=commands,
+            )
         except ValidationError as exc:
             raise WorkspaceSettingsError(f"invalid verification configuration: {exc}") from exc
         settings = self.load()

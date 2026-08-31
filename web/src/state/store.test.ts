@@ -198,6 +198,39 @@ test("upserts activities and stores approval ids as opaque values", () => {
   expect(state.items[1]).toMatchObject({ kind: "approval", approvalId: "approval-1" });
 });
 
+test("manual verification updates an existing completed turn in place", () => {
+  const store = createAgentStore();
+  const apply = store.getState().applyEvent;
+  apply({
+    protocol_version: 2,
+    type: "turn.finished",
+    seq: 1,
+    session_id: sessionId,
+    turn_id: "turn-manual",
+    data: { status: "completed" },
+  });
+  apply({
+    protocol_version: 2,
+    type: "verification.started",
+    seq: 2,
+    session_id: sessionId,
+    turn_id: "turn-manual",
+    data: {},
+  });
+  expect(store.getState().items[0]).toMatchObject({ validationStatus: "incomplete" });
+  apply({
+    protocol_version: 2,
+    type: "verification.finished",
+    seq: 3,
+    session_id: sessionId,
+    turn_id: "turn-manual",
+    data: { status: "passed" },
+  });
+
+  expect(store.getState().busy).toBe(false);
+  expect(store.getState().items[0]).toMatchObject({ validationStatus: "passed" });
+});
+
 test("merges an approval into the operation card with the same stable id", () => {
   const store = createAgentStore();
   const apply = store.getState().applyEvent;

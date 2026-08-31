@@ -129,11 +129,22 @@ removes only Memory records whose evidence identifies that Session; failure in e
 the operation back. Removing a project from the recent-project index preserves its directory, Git
 data, sessions, and Memory so reopening it is recoverable.
 
-Project-scoped verification hooks are disabled by default and hold at most eight validated command
-strings. After a turn creates a change, the controller runs them through the existing command tool,
-approval policy, hard-safety screening, cancellation, timeout, and Step budget. A failure becomes a
-normal tool observation and permits at most two model repair attempts. Validation events are shown
-as deterministic receipts and are never inferred from final assistant text.
+Project-scoped verification stores an explicit enabled flag, optional Agent TDD guidance, and at
+most eight validated command strings. Legacy workspaces that already stored commands migrate as
+enabled; new workspaces remain disabled until the user opts in. Manual verification uses the same
+controller command path but never calls the model. Automatic verification runs only after a turn
+creates a change, through the existing command tool, approval policy, hard-safety screening,
+cancellation, timeout, and Step budget. Candidate final prose is buffered until those checks pass,
+so failed attempts cannot appear ahead of the repair trace. A failure becomes a normal tool
+observation and permits at most two model repair attempts. Validation events are deterministic
+receipts and are never inferred from final assistant text. Agent TDD changes only the system
+guidance: the Agent writes tests and invokes tools explicitly, while the verification layer owns
+automatic execution.
+
+The runtime derives conservative verification suggestions from small, workspace-confined project
+markers at the repository root and in direct child packages. It never executes discovery commands,
+does not follow directory symlinks, and ignores oversized package metadata. Suggestions remain UI
+hints until the user explicitly saves them.
 
 At 70% of the complete request size (messages plus tool schemas), deterministic compaction runs
 before a new user turn rather than inside an active tool chain. It preserves the goal, constraints,

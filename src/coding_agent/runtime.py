@@ -61,6 +61,8 @@ class RuntimeFactory:
         max_steps_override = workspace_overrides.max_steps
         if max_steps_override is not None:
             self.settings.agent.max_steps = max_steps_override
+        self.verification_enabled = workspace_overrides.verification.enabled
+        self.verification_agent_tdd = workspace_overrides.verification.agent_tdd
         self.verification_commands = tuple(workspace_overrides.verification.commands)
 
         self.credentials = credentials or KeyringCredentialService()
@@ -155,6 +157,8 @@ class RuntimeFactory:
             event_sink=self.event_sink,
             model_manager=self.model_manager,
             verification_commands=self.verification_commands,
+            verification_enabled=self.verification_enabled,
+            verification_agent_tdd=self.verification_agent_tdd,
         )
 
     def controller_factory(self) -> ControllerFactory:

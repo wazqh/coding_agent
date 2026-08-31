@@ -2,7 +2,9 @@ from __future__ import annotations
 
 import json
 from collections.abc import Callable
+from contextlib import suppress
 from enum import StrEnum
+from pathlib import Path
 from typing import TYPE_CHECKING, Literal, cast
 
 from pydantic import BaseModel, ConfigDict, Field
@@ -82,7 +84,68 @@ class ContextSummary(_FrozenModel):
 
 
 class VerificationSummary(_FrozenModel):
+    enabled: bool = False
+    agent_tdd: bool = False
     commands: tuple[str, ...] = ()
+    suggested_commands: tuple[str, ...] = ()
+
+
+def _verification_suggestions(workspace: Path) -> tuple[str, ...]:
+    """Return conservative, project-derived verification commands for the GUI."""
+
+    suggestions: list[str] = []
+
+    def add(command: str) -> None:
+        if command not in suggestions and len(suggestions) < 8:
+            suggestions.append(command)
+
+    pyproject = workspace / "pyproject.toml"
+    pyproject_text = ""
+    with suppress(OSError):
+        if pyproject.is_file():
+            pyproject_text = pyproject.read_text(encoding="utf-8")
+    if (
+        (workspace / "pytest.ini").is_file()
+        or (workspace / "tests").is_dir()
+        or "[tool.pytest" in pyproject_text
+    ):
+        add("python -m pytest -q")
+    if (workspace / "ruff.toml").is_file() or "[tool.ruff" in pyproject_text:
+        add("python -m ruff check .")
+    if (workspace / "mypy.ini").is_file() or "[tool.mypy" in pyproject_text:
+        add("python -m mypy")
+
+    package_files = [workspace / "package.json"]
+    with suppress(OSError):
+        package_files.extend(
+            sorted(
+                path / "package.json"
+                for path in workspace.iterdir()
+                if path.is_dir() and not path.is_symlink() and not path.name.startswith(".")
+            )
+        )
+    for package_file in package_files[:32]:
+        try:
+            if package_file.stat().st_size > 2 * 1024 * 1024:
+                continue
+            payload = json.loads(package_file.read_text(encoding="utf-8"))
+        except (OSError, json.JSONDecodeError):
+            continue
+        scripts = payload.get("scripts") if isinstance(payload, dict) else None
+        if not isinstance(scripts, dict):
+            continue
+        relative_parent = package_file.parent.relative_to(workspace)
+        prefix = "" if relative_parent == Path(".") else f' --prefix "{relative_parent.as_posix()}"'
+        if isinstance(scripts.get("test"), str):
+            add(f"npm{prefix} test")
+        if isinstance(scripts.get("build"), str):
+            add(f"npm{prefix} run build")
+
+    if (workspace / "Cargo.toml").is_file():
+        add("cargo test")
+    if (workspace / "go.mod").is_file():
+        add("go test ./...")
+    return tuple(suggestions)
 
 
 class MemorySummary(_FrozenModel):
@@ -213,7 +276,10 @@ class RuntimeManagement:
                 breakdown=breakdown,
             ),
             verification=VerificationSummary(
-                commands=tuple(self.workspace_settings.load().verification.commands)
+                enabled=self.workspace_settings.load().verification.enabled,
+                agent_tdd=self.workspace_settings.load().verification.agent_tdd,
+                commands=tuple(self.workspace_settings.load().verification.commands),
+                suggested_commands=_verification_suggestions(workspace),
             ),
             resources=ResourceSummary(
                 project_resources_loaded=self.runtime.trusted_project,
@@ -252,15 +318,49 @@ class RuntimeManagement:
 
     def set_verification_commands(self, commands: list[str]) -> RuntimeSnapshot:
         self.workspace_settings.set_verification_commands(commands)
-        normalized = tuple(self.workspace_settings.load().verification.commands)
+        verification = self.workspace_settings.load().verification
+        normalized = tuple(verification.commands)
+        self.runtime.verification_enabled = verification.enabled
+        self.runtime.verification_agent_tdd = verification.agent_tdd
         self.runtime.verification_commands = normalized
-        self._controller_provider().verification_commands = normalized
+        controller = self._controller_provider()
+        controller.verification_commands = normalized
+        controller.verification_enabled = verification.enabled
+        controller.verification_agent_tdd = verification.agent_tdd
+        return self.snapshot()
+
+    def set_verification(
+        self,
+        *,
+        enabled: bool,
+        agent_tdd: bool,
+        commands: list[str],
+    ) -> RuntimeSnapshot:
+        self.workspace_settings.set_verification(
+            enabled=enabled,
+            agent_tdd=agent_tdd,
+            commands=commands,
+        )
+        verification = self.workspace_settings.load().verification
+        normalized = tuple(verification.commands)
+        self.runtime.verification_enabled = verification.enabled
+        self.runtime.verification_agent_tdd = verification.agent_tdd
+        self.runtime.verification_commands = normalized
+        controller = self._controller_provider()
+        controller.verification_enabled = verification.enabled
+        controller.verification_agent_tdd = verification.agent_tdd
+        controller.verification_commands = normalized
         return self.snapshot()
 
     def reset_verification_commands(self) -> RuntimeSnapshot:
         self.workspace_settings.reset_verification_commands()
         self.runtime.verification_commands = ()
-        self._controller_provider().verification_commands = ()
+        self.runtime.verification_enabled = False
+        self.runtime.verification_agent_tdd = False
+        controller = self._controller_provider()
+        controller.verification_commands = ()
+        controller.verification_enabled = False
+        controller.verification_agent_tdd = False
         return self.snapshot()
 
     def model_catalog(self) -> ModelCatalogSnapshot:

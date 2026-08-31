@@ -5229,3 +5229,212 @@ textarea:focus-visible {
     gap: 4px;
   }
 }
+
+/* Verification is a first-class run surface, not another settings card buried
+   below command history. Keep its controls aligned with Forge's calm inspector language. */
+.run-section-tabs {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 4px;
+  padding: 4px;
+  background: #e7ebef;
+  border: 1px solid #d9dfe6;
+  border-radius: 14px;
+}
+
+.run-section-tabs button {
+  min-height: 38px;
+  color: #68737e;
+  font: inherit;
+  font-weight: 560;
+  cursor: pointer;
+  background: transparent;
+  border: 0;
+  border-radius: 10px;
+  transition: color 140ms ease, background 140ms ease, box-shadow 140ms ease;
+}
+
+.run-section-tabs button:hover { color: #29323b; background: rgb(255 255 255 / 55%); }
+.run-section-tabs button.is-active {
+  color: #26313a;
+  font-weight: 650;
+  background: #fff;
+  box-shadow: 0 1px 3px rgb(31 43 56 / 10%);
+}
+
+.verification-settings { gap: 16px; }
+.verification-switch {
+  display: inline-flex;
+  gap: 8px;
+  align-items: center;
+  color: var(--muted);
+  font-size: 11.5px;
+  cursor: pointer;
+}
+
+.verification-switch input {
+  width: 34px;
+  height: 20px;
+  margin: 0;
+  appearance: none;
+  cursor: pointer;
+  background: #c8cfd7;
+  border-radius: 999px;
+  box-shadow: inset 0 0 0 1px rgb(45 58 72 / 8%);
+  transition: background 150ms ease;
+}
+
+.verification-switch input::after {
+  display: block;
+  width: 16px;
+  height: 16px;
+  margin: 2px;
+  content: "";
+  background: #fff;
+  border-radius: 50%;
+  box-shadow: 0 1px 3px rgb(31 43 56 / 24%);
+  transition: transform 150ms ease;
+}
+
+.verification-switch input:checked { background: #5f8847; }
+.verification-switch input:checked::after { transform: translateX(14px); }
+.verification-switch input:focus-visible { outline: 2px solid #8eadd5; outline-offset: 2px; }
+
+.verification-tdd-option {
+  display: grid;
+  grid-template-columns: 18px minmax(0, 1fr);
+  gap: 10px;
+  align-items: start;
+  padding: 12px;
+  cursor: pointer;
+  background: #f4f6f2;
+  border: 1px solid #dfe5da;
+  border-radius: 13px;
+}
+
+.verification-tdd-option input { margin: 2px 0 0; accent-color: #628b49; }
+.verification-tdd-option span { display: flex; min-width: 0; flex-direction: column; gap: 3px; }
+.verification-tdd-option strong { color: #29323b; font-size: 12px; }
+.verification-tdd-option small,
+.verification-command-label small { color: var(--muted); font-size: 11px; line-height: 1.55; }
+.verification-tdd-option:has(input:disabled) { cursor: default; opacity: 0.62; }
+
+.verification-command-label {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+  color: #313b44;
+  font-size: 11.5px;
+  font-weight: 650;
+}
+
+.completion-action {
+  min-height: 28px;
+  margin-left: auto;
+  padding: 0 11px;
+  color: #3f6f9f;
+  font: inherit;
+  font-size: 10.5px;
+  font-weight: 650;
+  cursor: pointer;
+  background: #edf4fb;
+  border: 1px solid #d4e2f0;
+  border-radius: 9px;
+}
+
+.completion-action:hover { background: #e3effa; border-color: #bfcfe1; }
+.completion-action.is-repair { color: #a44a43; background: #fbefed; border-color: #efd2ce; }
+
+.completion-row.validation-incomplete { color: #4e78a8; }
+.completion-row.validation-incomplete > span {
+  color: #4d86c5;
+  animation: verification-pulse 1.25s ease-in-out infinite;
+}
+
+@keyframes verification-pulse {
+  0%, 100% { opacity: 0.45; transform: scale(0.88); }
+  50% { opacity: 1; transform: scale(1); }
+}
+
+.verification-empty-note {
+  padding: 10px 12px;
+  color: #65717c;
+  font-size: 11px;
+  line-height: 1.55;
+  background: #f4f6f8;
+  border: 1px dashed #d6dde4;
+  border-radius: 11px;
+}
+
+.verification-suggestions,
+.verification-guidance {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding: 11px 12px;
+  background: #f7f8f5;
+  border: 1px solid #e0e4dc;
+  border-radius: 12px;
+}
+
+.verification-suggestions > span,
+.verification-guidance strong {
+  color: #58636c;
+  font-size: 11px;
+  font-weight: 650;
+}
+
+.verification-suggestions > div {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 7px;
+}
+
+.verification-suggestions button {
+  display: inline-flex;
+  max-width: 100%;
+  min-height: 34px;
+  gap: 7px;
+  align-items: center;
+  padding: 5px 9px;
+  color: #40505c;
+  cursor: pointer;
+  background: #fff;
+  border: 1px solid #d8dee3;
+  border-radius: 9px;
+  transition: color 140ms ease, background 140ms ease, border-color 140ms ease,
+    transform 140ms ease;
+}
+
+.verification-suggestions button:hover:not(:disabled) {
+  color: #315f91;
+  background: #f2f7fc;
+  border-color: #bdd0e3;
+  transform: translateY(-1px);
+}
+
+.verification-suggestions button.is-selected {
+  color: #557844;
+  background: #eef5e9;
+  border-color: #d2e2c8;
+}
+
+.verification-suggestions button:disabled { cursor: default; }
+.verification-suggestions code {
+  overflow: hidden;
+  font-family: "JetBrains Mono", monospace;
+  font-size: 11.25px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.verification-guidance span {
+  color: var(--muted);
+  font-size: 11px;
+  line-height: 1.55;
+}
+
+/* The inspector scrolls like the session rail: wheel, keyboard and touch remain
+   available, while a persistent native gutter no longer cuts through the surface. */
+.context-drawer .drawer-content { scrollbar-width: none; }
+.context-drawer .drawer-content::-webkit-scrollbar { width: 0; height: 0; }

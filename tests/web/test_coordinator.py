@@ -8,7 +8,7 @@ from types import SimpleNamespace
 
 import pytest
 
-from coding_agent.controller import RunResult
+from coding_agent.controller import RunResult, VerificationRunResult
 from coding_agent.events import AgentEvent, AgentState, EventKind
 from coding_agent.memory import MemoryStore
 from coding_agent.safety.approval import ApprovalDecision, ApprovalPolicy, ApprovalRequest
@@ -35,6 +35,7 @@ class FakeController:
         self.release = release
         self.session_id = session_id
         self.working = SimpleNamespace(diffs=[])
+        self.verified_turns: list[str] = []
 
     def run_turn(self, task: str, *, cancel_event: Event | None = None) -> RunResult:
         turn_id = "turn-1"
@@ -65,6 +66,15 @@ class FakeController:
             )
         )
         return RunResult(status, 0, self.session_id, f"answer:{task}", 0, status.value)
+
+    def run_verification(
+        self,
+        turn_id: str,
+        *,
+        cancel_event: Event | None = None,
+    ) -> VerificationRunResult:
+        self.verified_turns.append(turn_id)
+        return VerificationRunResult(status="passed", command_count=1)
 
 
 class FakeRuntime:
@@ -179,6 +189,24 @@ def test_coordinator_streams_ordered_semantic_events() -> None:
     assert [event.seq for event in events] == [1, 2, 3]
     assert events[1].data["delta"] == "answer:hello"
     assert runtime.created == [None]
+
+
+def test_coordinator_runs_manual_verification_for_the_existing_turn() -> None:
+    coordinator = TurnCoordinator()
+    runtime = FakeRuntime(coordinator.handle_agent_event)
+    coordinator.attach_runtime(runtime)
+
+    coordinator.start_verification("turn-existing")
+    assert coordinator.wait_until_idle(timeout=1)
+    events = coordinator.drain_events()
+
+    assert runtime.controllers[0].verified_turns == ["turn-existing"]
+    assert [event.type for event in events] == [
+        ViewEventType.VERIFICATION_STARTED,
+        ViewEventType.VERIFICATION_FINISHED,
+    ]
+    assert events[-1].turn_id == "turn-existing"
+    assert events[-1].data["status"] == "passed"
 
 
 def test_coordinator_rejects_parallel_turn_and_cancels_active_work() -> None:

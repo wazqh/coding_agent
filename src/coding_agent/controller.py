@@ -7,7 +7,7 @@ from collections.abc import Callable
 from dataclasses import dataclass
 from pathlib import Path
 from threading import Event
-from typing import Any
+from typing import Any, Literal
 from uuid import uuid4
 
 from coding_agent.branding import PRODUCT_NAME
@@ -38,6 +38,12 @@ class RunResult:
     reason: str
 
 
+@dataclass(frozen=True)
+class VerificationRunResult:
+    status: Literal["passed", "failed", "cancelled", "not_configured"]
+    command_count: int
+
+
 class AgentController:
     def __init__(
         self,
@@ -55,11 +61,19 @@ class AgentController:
         monotonic: Callable[[], float] = time.monotonic,
         model_manager: ModelManager | None = None,
         verification_commands: list[str] | tuple[str, ...] = (),
+        verification_enabled: bool | None = None,
+        verification_agent_tdd: bool = False,
     ) -> None:
         self.settings = settings
         self.model = model
         self.model_manager = model_manager
         self.verification_commands = tuple(verification_commands)
+        self.verification_enabled = (
+            bool(self.verification_commands)
+            if verification_enabled is None
+            else verification_enabled
+        )
+        self.verification_agent_tdd = verification_agent_tdd
         self.tools = tools
         self.sessions = sessions
         self.approval = approval
@@ -222,6 +236,14 @@ class AgentController:
         ]
         if self.agents_instructions:
             sections.append("Trusted repository instructions:\n" + self.agents_instructions)
+        if self.verification_enabled and self.verification_agent_tdd:
+            sections.append(
+                "Agent TDD mode is enabled. Before changing production behavior, write or update "
+                "focused tests that reproduce the requested behavior; execute test commands "
+                "through the provided tools and use their returned results as evidence; do not "
+                "simulate or claim command execution. The deterministic verification layer may "
+                "run the configured project checks again before delivery."
+            )
         if memory_text:
             sections.append(memory_text)
         if self.skills is not None:
@@ -279,6 +301,78 @@ class AgentController:
             skills=self.skills,
             cancel_requested=cancel_event.is_set if cancel_event is not None else None,
         )
+
+    def run_verification(
+        self,
+        turn_id: str,
+        *,
+        cancel_event: Event | None = None,
+    ) -> VerificationRunResult:
+        """Run configured project checks without starting another model turn.
+
+        Manual verification deliberately uses the ordinary ``run_command`` tool path so
+        workspace confinement, hard safety rules, approvals, cancellation and event persistence
+        remain identical to commands initiated by the model.
+        """
+
+        if not self.verification_commands:
+            return VerificationRunResult(status="not_configured", command_count=0)
+
+        context = self._tool_context(turn_id, cancel_event)
+        completed = 0
+        for command in self.verification_commands:
+            if cancel_event is not None and cancel_event.is_set():
+                return VerificationRunResult(status="cancelled", command_count=completed)
+            operation_id = f"verification-{uuid4().hex[:16]}"
+            arguments = {"command": command}
+            self._set_state(
+                AgentState.TOOL_PENDING,
+                turn_id,
+                tool="run_command",
+                step=completed + 1,
+            )
+            self._emit(
+                EventKind.TOOL_CALL,
+                turn_id=turn_id,
+                data={
+                    "id": operation_id,
+                    "name": "run_command",
+                    "arguments": arguments,
+                    "verification": True,
+                    "manual": True,
+                },
+            )
+            self._set_state(
+                AgentState.EXECUTING,
+                turn_id,
+                tool="run_command",
+                step=completed + 1,
+            )
+            context.operation_id = operation_id
+            result = self.tools.execute("run_command", arguments, context)
+            completed += 1
+            self._set_state(
+                AgentState.OBSERVING,
+                turn_id,
+                tool="run_command",
+                step=completed,
+            )
+            self._emit(
+                EventKind.TOOL_RESULT,
+                turn_id=turn_id,
+                data={
+                    "id": operation_id,
+                    "name": "run_command",
+                    "result": result.model_dump(),
+                    "verification": True,
+                    "manual": True,
+                },
+            )
+            if cancel_event is not None and cancel_event.is_set():
+                return VerificationRunResult(status="cancelled", command_count=completed)
+            if not result.ok:
+                return VerificationRunResult(status="failed", command_count=completed)
+        return VerificationRunResult(status="passed", command_count=completed)
 
     def manual_compact(self) -> str:
         compacted, summary = self.context.compact(self.conversation, self.working)
@@ -462,6 +556,11 @@ class AgentController:
                 content_parts: list[str] = []
                 tool_calls: list[ToolCall] = []
                 model_error: str | None = None
+                defer_text = (
+                    self.verification_enabled
+                    and bool(self.verification_commands)
+                    and any(change.id not in initial_change_ids for change in self.working.changes)
+                )
                 for event in self.model.stream(request_messages, tool_schemas):
                     if cancel_event is not None and cancel_event.is_set():
                         return self._finish(
@@ -474,7 +573,8 @@ class AgentController:
                         )
                     if event.type == "text_delta" and event.text:
                         content_parts.append(event.text)
-                        self._emit(EventKind.TEXT, turn_id=turn_id, data={"delta": event.text})
+                        if not defer_text:
+                            self._emit(EventKind.TEXT, turn_id=turn_id, data={"delta": event.text})
                     elif event.type == "tool_calls":
                         tool_calls = event.tool_calls
                     elif event.type == "usage" and event.usage:
@@ -504,6 +604,8 @@ class AgentController:
                     )
                 assistant: dict[str, Any] = {"role": "assistant", "content": content or None}
                 if tool_calls:
+                    if defer_text and content:
+                        self._emit(EventKind.TEXT, turn_id=turn_id, data={"delta": content})
                     assistant["tool_calls"] = []
                     for call in tool_calls:
                         call_payload: dict[str, Any] = {
@@ -533,7 +635,11 @@ class AgentController:
                         change.id not in initial_change_ids for change in self.working.changes
                     )
                     verification_failed = False
-                    if changed_this_turn and self.verification_commands:
+                    if (
+                        changed_this_turn
+                        and self.verification_enabled
+                        and self.verification_commands
+                    ):
                         context = self._tool_context(turn_id, cancel_event)
                         for command in self.verification_commands:
                             if steps >= self.settings.agent.max_steps:
@@ -661,6 +767,8 @@ class AgentController:
                                 break
                     if verification_failed:
                         continue
+                    if defer_text and content:
+                        self._emit(EventKind.TEXT, turn_id=turn_id, data={"delta": content})
                     self._append_message(assistant)
                     return self._finish(
                         AgentState.COMPLETED, turn_id, content, steps, "assistant completed"

@@ -49,10 +49,16 @@ Agent activity timeline and plan, inline three-way approvals, Markdown output, `
 completion, model/provider onboarding, runtime controls, and a resizable task inspector. Daily
 model switching is a flat model-first list; the lower-frequency connection manager separately
 handles provider metadata, credentials, and each provider's expandable model catalog. The
-inspector separates **Settings** (model, permissions, and Step budget) from **Run** (verification
-rules and execution evidence), while slash commands open the corresponding panel directly. Its
-**Resources** tab groups files read or changed in the current session into a collapsible tree; selecting
-a file opens an adjacent workspace-confined, read-only preview with metadata and line numbers. The
+inspector separates **Settings** (model, permissions, and Step budget) from **Run**. Run itself has
+two focused views: **Command history** for real command output and **Verification** for project
+checks, the automatic-verification switch, Agent TDD guidance, and deterministic evidence. Slash
+commands open the corresponding panel directly. When no checks are configured, Forge derives
+one-click suggestions from project markers such as `pyproject.toml`, `package.json`, `Cargo.toml`,
+and `go.mod`; discovery only reads workspace-confined metadata and never executes a command. Its
+**Resources** tab groups files read or changed
+in the current session into a collapsible tree; selecting a file opens an adjacent
+workspace-confined, read-only preview with metadata, line numbers, and syntax highlighting for
+common source formats. Diff rendering keeps review semantics ahead of syntax coloring. The
 Skills view can turn a natural-language requirement into an editable draft, fall back to a local
 template when the model is unavailable, and writes only after the user chooses personal or
 trusted-project scope and confirms creation. Approval,
@@ -216,12 +222,17 @@ by repository identity like project Memory, and never edits the workspace; `/ste
 the trusted project value or the default. Non-interactive execution returns code 3 when an approval
 would be required; configuration failures return 2 and user cancellation returns 130.
 
-The desktop **Task inspector → Run** tab can store up to eight project-scoped verification commands,
-one command per line. Verification is disabled until commands are explicitly saved. After a turn
-changes files, Forge runs those checks through the normal command safety, approval, cancellation,
-timeout, and Step-budget boundaries. A failing observation is returned to the model for at most two
-repair attempts; deterministic pass/fail receipts remain separate from the model's prose. Hard
-safety blocks cannot be overridden by verification settings or GUI controls.
+The desktop **Task inspector → Run → Verification** view can store up to eight project-scoped
+verification commands, one command per line. Project-derived suggestion chips reduce setup guesswork,
+but a command becomes active only after the user explicitly saves it. Automatic verification is an explicit switch. With it
+off, a completed turn remains visibly **unverified** and can be checked on demand from its timeline
+footer. With it on, a file-changing turn runs the configured checks through the normal command
+safety, approval, cancellation, timeout, and Step-budget boundaries before its final answer is
+released. Optional **Agent TDD** guidance asks the Agent to write focused tests and execute them with
+ordinary tools; the deterministic verification layer—not the model—owns the automatic trigger. A
+failing observation is returned to the model for at most two repair attempts. The final failed
+receipt offers a visible repair action that sends the command and failure evidence back as a new
+user-visible task. Hard safety blocks cannot be overridden by verification settings or GUI controls.
 
 ## Safety model
 

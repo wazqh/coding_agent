@@ -40,6 +40,7 @@ interface ContextDrawerProps {
   memoryState: MemoryState | null;
   skillsState: SkillsState | null;
   initialTab?: InspectorTab;
+  initialRunPanel?: "commands" | "verification";
   openModelManager?: boolean;
   onTabChange?: (tab: InspectorTab) => void;
   onRuntimeRefresh: () => void;
@@ -55,7 +56,11 @@ interface ContextDrawerProps {
   onPermissionChange: (mode: "prompt" | "auto" | "read-only") => void;
   onStepsChange: (value: number) => boolean | void;
   onStepsReset: () => boolean | void;
-  onVerificationChange: (commands: string[]) => boolean | void;
+  onVerificationChange: (config: {
+    enabled: boolean;
+    agentTdd: boolean;
+    commands: string[];
+  }) => boolean | void;
   onMemoryList: () => void;
   onMemoryToggle: (enabled: boolean) => void;
   onRemember: (content: string) => void;
@@ -111,6 +116,9 @@ export function ContextDrawer(props: ContextDrawerProps) {
   } = props;
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const [tab, setTab] = useState<InspectorTab>(initialTab);
+  const [runPanel, setRunPanel] = useState<"commands" | "verification">(
+    props.initialRunPanel ?? "commands",
+  );
   const [resourceTab, setResourceTab] = useState<"files" | "skills" | "memory">("files");
   const [resourcePreviewPath, setResourcePreviewPath] = useState<string | null>(null);
   const [skillQuery, setSkillQuery] = useState("");
@@ -126,17 +134,32 @@ export function ContextDrawer(props: ContextDrawerProps) {
   const [verificationDraft, setVerificationDraft] = useState(
     (runtime?.verification?.commands ?? []).join("\n"),
   );
+  const [verificationEnabled, setVerificationEnabled] = useState(
+    runtime?.verification?.enabled ?? false,
+  );
+  const [verificationAgentTdd, setVerificationAgentTdd] = useState(
+    runtime?.verification?.agent_tdd ?? false,
+  );
   const [verificationPending, setVerificationPending] = useState<string | null>(null);
   const [verificationFeedback, setVerificationFeedback] = useState("");
+  const verificationCommands = useMemo(
+    () => verificationDraft.split(/\r?\n/).map((command) => command.trim()).filter(Boolean),
+    [verificationDraft],
+  );
+  const verificationSuggestions = runtime?.verification?.suggested_commands ?? [];
   const [modelManagerOpen, setModelManagerOpen] = useState(props.openModelManager ?? false);
   const pendingChanges = useMemo(
     () => changes.filter((change) => change.reviewStatus !== "accepted"),
     [changes],
   );
   const selected = pendingChanges.find((change) => change.id === selectedId);
-  const runItems = props.timelineItems.filter(
+  const commandItems = props.timelineItems.filter(
     (item): item is Extract<TimelineItem, { kind: "activity" }> =>
-      item.kind === "activity" && ["command", "validation"].includes(item.activityKind),
+      item.kind === "activity" && item.activityKind === "command",
+  );
+  const validationItems = props.timelineItems.filter(
+    (item): item is Extract<TimelineItem, { kind: "activity" }> =>
+      item.kind === "activity" && item.activityKind === "validation",
   );
   const resourcePaths = useMemo(() => {
     const paths = new Set(changes.map((change) => change.path));
@@ -184,13 +207,18 @@ export function ContextDrawer(props: ContextDrawerProps) {
   }, [runtime?.steps?.current]);
 
   useEffect(() => {
-    const current = (runtime?.verification?.commands ?? []).join("\n");
-    setVerificationDraft(current);
+    const commands = (runtime?.verification?.commands ?? []).join("\n");
+    const enabled = runtime?.verification?.enabled ?? false;
+    const agentTdd = runtime?.verification?.agent_tdd ?? false;
+    const current = JSON.stringify({ enabled, agentTdd, commands });
+    setVerificationDraft(commands);
+    setVerificationEnabled(enabled);
+    setVerificationAgentTdd(agentTdd);
     if (verificationPending !== null && verificationPending === current) {
       setVerificationPending(null);
-      setVerificationFeedback("验证规则已保存，下一次文件变更后生效");
+      setVerificationFeedback(enabled ? "自动验证已更新，下一次文件变更后生效" : "自动验证已关闭");
     }
-  }, [runtime?.verification?.commands]);
+  }, [runtime?.verification?.enabled, runtime?.verification?.agent_tdd, runtime?.verification?.commands]);
 
   useEffect(() => {
     if (verificationPending === null) return;
@@ -323,22 +351,179 @@ export function ContextDrawer(props: ContextDrawerProps) {
           <div className="inspector-overview inspector-stack">
             {tab === "run" ? (
               <>
-            <section className="settings-card inspector-run-history" aria-label="命令与验证记录">
-              <div className="settings-card-heading"><div><strong>执行记录</strong><small>命令、退出状态与结构化结果</small></div></div>
-              {runItems.length ? runItems.map((item) => (
-                <details key={item.id} className={`run-history-row is-${item.status}`}>
-                  <summary><span>{item.activityKind === "validation" ? "验证" : "命令"}</span><strong>{item.summary}</strong><i>{item.status === "completed" ? "完成" : item.status === "failed" ? "失败" : "执行中"}</i></summary>
-                  {item.detail !== undefined ? <StructuredToolDetail detail={item.detail} activityKind={item.activityKind} /> : null}
-                </details>
-              )) : <div className="resource-empty">当前会话还没有命令记录</div>}
-            </section>
-            <div className="inspector-status-card">
-              <span className={busy ? "status-pulse" : "health-dot"} />
-              <div>
-                <strong>{busy ? "正在执行任务" : "运行时已就绪"}</strong>
-                <small>{busy ? "运行期间设置保持只读" : "所有设置仅作用于当前工作区或进程"}</small>
-              </div>
-            </div>
+                <div className="run-section-tabs" role="tablist" aria-label="运行面板">
+                  <button
+                    type="button"
+                    role="tab"
+                    aria-selected={runPanel === "commands"}
+                    className={runPanel === "commands" ? "is-active" : ""}
+                    onClick={() => setRunPanel("commands")}
+                  >命令记录</button>
+                  <button
+                    type="button"
+                    role="tab"
+                    aria-selected={runPanel === "verification"}
+                    className={runPanel === "verification" ? "is-active" : ""}
+                    onClick={() => setRunPanel("verification")}
+                  >验证</button>
+                </div>
+
+                {runPanel === "commands" ? (
+                  <>
+                    <section className="settings-card inspector-run-history" aria-label="命令记录">
+                      <div className="settings-card-heading">
+                        <div><strong>命令记录</strong><small>Agent 实际执行的命令、退出状态与结果</small></div>
+                      </div>
+                      {commandItems.length ? commandItems.map((item) => (
+                        <details key={item.id} className={`run-history-row is-${item.status}`}>
+                          <summary><span>命令</span><strong>{item.summary}</strong><i>{item.status === "completed" ? "完成" : item.status === "failed" ? "失败" : "执行中"}</i></summary>
+                          {item.detail !== undefined ? <StructuredToolDetail detail={item.detail} activityKind={item.activityKind} /> : null}
+                        </details>
+                      )) : <div className="resource-empty">当前会话还没有命令记录</div>}
+                    </section>
+                    <div className="inspector-status-card">
+                      <span className={busy ? "status-pulse" : "health-dot"} />
+                      <div>
+                        <strong>{busy ? "正在执行任务" : "运行时已就绪"}</strong>
+                        <small>{busy ? "运行期间设置保持只读" : "命令仍受审批、工作区边界和硬安全规则保护"}</small>
+                      </div>
+                    </div>
+                  </>
+                ) : (
+                  <>
+                    <section className="settings-card verification-settings" aria-labelledby="verification-setting-title">
+                      <div className="settings-card-heading">
+                        <div>
+                          <strong id="verification-setting-title">自动验证</strong>
+                          <small>由验证层在文件变更后触发，不依赖 Agent 自觉执行</small>
+                        </div>
+                        <label className="verification-switch">
+                          <input
+                            type="checkbox"
+                            role="switch"
+                            aria-label="自动验证"
+                            checked={verificationEnabled}
+                            disabled={busy}
+                            onChange={(event) => {
+                              setVerificationEnabled(event.target.checked);
+                              setVerificationFeedback("");
+                            }}
+                          />
+                          <span>{verificationEnabled ? "开启" : "关闭"}</span>
+                        </label>
+                      </div>
+                      <label className="verification-tdd-option">
+                        <input
+                          type="checkbox"
+                          aria-label="Agent TDD"
+                          checked={verificationAgentTdd}
+                          disabled={busy || !verificationEnabled}
+                          onChange={(event) => setVerificationAgentTdd(event.target.checked)}
+                        />
+                        <span><strong>Agent TDD</strong><small>Agent 先编写用例并通过工具执行；自动触发仍由验证层完成。</small></span>
+                      </label>
+                      <label className="verification-command-label" htmlFor="verification-commands">
+                        验证命令
+                        <small>每行一条，按顺序运行。关闭自动验证后仍可手动验证。</small>
+                      </label>
+                      {!runtime?.verification?.commands?.length ? (
+                        <div className="verification-empty-note" role="note">
+                          先选择下方检测到的命令，或填写项目实际使用的测试、构建命令。
+                        </div>
+                      ) : null}
+                      {verificationSuggestions.length ? (
+                        <div className="verification-suggestions" role="group" aria-label="检测到的验证命令">
+                          <span>项目建议</span>
+                          <div>
+                            {verificationSuggestions.map((command) => {
+                              const selected = verificationCommands.includes(command);
+                              return (
+                                <button
+                                  key={command}
+                                  type="button"
+                                  className={selected ? "is-selected" : ""}
+                                  aria-label={`${selected ? "已添加" : "添加建议命令"} ${command}`}
+                                  disabled={busy || selected}
+                                  onClick={() => {
+                                    setVerificationDraft((current) => {
+                                      const prefix = current.trim() ? `${current.trimEnd()}\n` : "";
+                                      return `${prefix}${command}`;
+                                    });
+                                    setVerificationFeedback(`已添加：${command}`);
+                                  }}
+                                >
+                                  <span>{selected ? "✓" : "+"}</span>
+                                  <code>{command}</code>
+                                </button>
+                              );
+                            })}
+                          </div>
+                        </div>
+                      ) : (
+                        <div className="verification-guidance" role="note">
+                          <strong>没有检测到现成命令</strong>
+                          <span>可查看 README 或项目脚本；常见写法包括 pytest、npm test、cargo test。</span>
+                        </div>
+                      )}
+                      <textarea
+                        id="verification-commands"
+                        className="verification-command-input mono-label"
+                        aria-label="项目验证命令"
+                        rows={Math.max(3, Math.min(6, verificationDraft.split("\n").length + 1))}
+                        value={verificationDraft}
+                        disabled={busy}
+                        placeholder={"例如：\npython -m pytest -q\npython -m ruff check ."}
+                        onChange={(event) => {
+                          setVerificationDraft(event.target.value);
+                          setVerificationFeedback("");
+                        }}
+                      />
+                      <div className="settings-card-footer">
+                        <small>验证命令仍受权限审批、危险命令硬阻断与 Step 预算约束。</small>
+                        <button
+                          type="button"
+                          className="primary-small"
+                          disabled={busy || verificationPending !== null}
+                          onClick={() => {
+                            const commands = verificationCommands;
+                            if (verificationEnabled && !commands.length) {
+                              setVerificationAgentTdd(false);
+                              setVerificationFeedback("请先添加至少一条验证命令，再开启自动验证");
+                              return;
+                            }
+                            const accepted = props.onVerificationChange({
+                              enabled: verificationEnabled,
+                              agentTdd: verificationAgentTdd,
+                              commands,
+                            });
+                            if (accepted === false) {
+                              setVerificationFeedback("运行时未连接，保存失败");
+                              return;
+                            }
+                            setVerificationPending(JSON.stringify({
+                              enabled: verificationEnabled,
+                              agentTdd: verificationAgentTdd,
+                              commands: commands.join("\n"),
+                            }));
+                            setVerificationFeedback("正在保存…");
+                          }}
+                        >{verificationPending ? "保存中…" : "保存验证设置"}</button>
+                      </div>
+                      {verificationFeedback ? <div className="setting-feedback" role="status">{verificationFeedback}</div> : null}
+                    </section>
+                    <section className="settings-card inspector-run-history" aria-label="验证记录">
+                      <div className="settings-card-heading">
+                        <div><strong>验证记录</strong><small>确定性命令的最近执行证据</small></div>
+                      </div>
+                      {validationItems.length ? validationItems.map((item) => (
+                        <details key={item.id} className={`run-history-row is-${item.status}`}>
+                          <summary><span>验证</span><strong>{item.summary}</strong><i>{item.status === "completed" ? "通过" : item.status === "failed" ? "失败" : "执行中"}</i></summary>
+                          {item.detail !== undefined ? <StructuredToolDetail detail={item.detail} activityKind="validation" /> : null}
+                        </details>
+                      )) : <div className="resource-empty">当前会话还没有验证记录</div>}
+                    </section>
+                  </>
+                )}
               </>
             ) : null}
 
@@ -466,55 +651,6 @@ export function ContextDrawer(props: ContextDrawerProps) {
               </>
             ) : null}
 
-            {tab === "run" ? (
-            <section className="settings-card" aria-labelledby="verification-setting-title">
-              <div className="settings-card-heading">
-                <div>
-                  <strong id="verification-setting-title">自动验证</strong>
-                  <small>文件变更后按行执行；失败结果会回传 Agent，最多修复两轮</small>
-                </div>
-                {runtime?.verification?.commands?.length ? (
-                  <span className="setting-badge">项目规则</span>
-                ) : null}
-              </div>
-              <textarea
-                className="verification-command-input mono-label"
-                aria-label="项目验证命令"
-                rows={Math.max(3, Math.min(6, verificationDraft.split("\n").length + 1))}
-                value={verificationDraft}
-                disabled={busy}
-                placeholder={"例如：\npython -m pytest -q\npython -m ruff check ."}
-                onChange={(event) => {
-                  setVerificationDraft(event.target.value);
-                  setVerificationFeedback("");
-                }}
-              />
-              <div className="settings-card-footer">
-                <small>命令仍受权限审批、危险命令硬阻断与当前 Step 预算约束。</small>
-                <button
-                  type="button"
-                  className="primary-small"
-                  disabled={busy}
-                  onClick={() => {
-                    const commands = verificationDraft
-                      .split(/\r?\n/)
-                      .map((command) => command.trim())
-                      .filter(Boolean);
-                    const accepted = props.onVerificationChange(commands);
-                    if (accepted === false) {
-                      setVerificationFeedback("运行时未连接，保存失败");
-                      return;
-                    }
-                    setVerificationPending(commands.join("\n"));
-                    setVerificationFeedback("正在保存…");
-                  }}
-                >保存验证规则</button>
-              </div>
-              {verificationFeedback ? (
-                <div className="setting-feedback" role="status">{verificationFeedback}</div>
-              ) : null}
-            </section>
-            ) : null}
           </div>
         ) : null}
 

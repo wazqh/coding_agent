@@ -14,6 +14,8 @@ export type ViewEventType =
   | "change.recorded"
   | "context.updated"
   | "turn.finished"
+  | "verification.started"
+  | "verification.finished"
   | "error"
   | "file.previewed"
   | "changes.updated"

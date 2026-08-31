@@ -59,6 +59,7 @@ from coding_agent.web.protocol import (
     StepsSetRequest,
     TurnCancelRequest,
     TurnStartRequest,
+    VerificationRunRequest,
     VerificationSetRequest,
     ViewEventType,
     parse_client_request,
@@ -375,7 +376,11 @@ def _dispatch_request(coordinator: TurnCoordinator, request: object) -> None:
         )
         return
     if isinstance(request, VerificationSetRequest):
-        snapshot = coordinator.set_verification_commands(request.commands)
+        snapshot = coordinator.set_verification(
+            enabled=request.enabled,
+            agent_tdd=request.agent_tdd,
+            commands=request.commands,
+        )
         coordinator.emit(
             ViewEventType.RUNTIME_UPDATED,
             {"runtime": snapshot.model_dump(mode="json")},
@@ -384,6 +389,9 @@ def _dispatch_request(coordinator: TurnCoordinator, request: object) -> None:
             ViewEventType.COMMAND_COMPLETED,
             {"command": request.type, "status": "completed"},
         )
+        return
+    if isinstance(request, VerificationRunRequest):
+        coordinator.start_verification(request.turn_id)
         return
     if isinstance(request, PlanGetRequest):
         coordinator.emit(

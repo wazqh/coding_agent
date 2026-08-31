@@ -31,14 +31,19 @@ browser product.
   non-overridable shield receipt. The restart-safe change ledger supports accept or conflict-safe
   undo for one or all changes, unified/side-by-side/fullscreen review, and resizable inspection.
 - Human-readable tool, run, resource, validation, and context details without raw JSON; project
-  verification hooks feed failures through at most two bounded repair attempts while retaining the
-  ordinary approval, safety, cancellation, and Step-budget boundaries.
+  verification separates command history from verification controls, offers project-derived
+  one-click command suggestions, supports manual or automatic checks plus Agent TDD guidance, and
+  feeds failures through at most two bounded repair attempts
+  while retaining the ordinary approval, safety, cancellation, and Step-budget boundaries. Turn
+  footers distinguish unverified, running, passed, and failed states and expose a visible repair
+  action with the failed evidence.
 - Bundled Noto Sans SC and JetBrains Mono, hashed wheel-contained renderer assets, Python/Vitest
   regression coverage, and a mocked renderer acceptance path at 1024×700 and 1920×1080 on Windows
   and Linux.
 - Review-surface hierarchy with WCAG-readable secondary text, semantic command rows, stronger active
   tabs, directory guide lines, shared code metrics, thin scrollbars, reduced-motion fallbacks, and
-  content-sized Diff controls that cannot be covered by the scrolling review body.
+  content-sized Diff controls that cannot be covered by the scrolling review body. Common source
+  files receive lazy syntax highlighting in the read-only preview; Diff colors retain priority.
 
 ## Required follow-up
 

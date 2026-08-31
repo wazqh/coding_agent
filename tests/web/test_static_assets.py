@@ -77,7 +77,7 @@ def test_sdist_excludes_local_test_and_frontend_build_data(tmp_path: Path) -> No
     assert all(
         parts
         and parts[0] not in forbidden_roots
-        and not parts[0].startswith((".test-tmp", "pytest-cache-files-"))
+        and not parts[0].startswith((".test-tmp", ".tmp-test", "pytest-cache-files-"))
         and "node_modules" not in parts
         for parts in names
     )

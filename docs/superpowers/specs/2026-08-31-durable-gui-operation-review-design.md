@@ -63,16 +63,25 @@ The Changes tab provides:
 - unified and side-by-side views;
 - an enlarged review view.
 
-The Run tab presents normalized command and validation history with commands, exit codes, duration,
-and human-readable output. Resources presents files touched or read during the turn. Context presents
-one consistent used-token metric and an explicitly approximate category breakdown.
+The Run tab separates normalized command history from verification setup and evidence so routine
+command output does not bury the validation state. Resources presents files touched or read during
+the turn and opens a workspace-confined, syntax-highlighted read-only preview beside the tree.
+Context presents one consistent used-token metric and an explicitly approximate category breakdown.
 
 ## Verification hooks
 
-Trusted project configuration may define verification commands. After a turn that changed files,
-the runtime executes configured checks through the existing command safety and approval policy.
+Trusted project configuration may define verification commands, an explicit automatic-verification
+switch, and optional Agent TDD guidance. Manual checks use the same tool path without invoking the
+model. With automatic verification enabled, a turn that changed files executes configured checks
+through the existing command safety and approval policy before candidate final prose is released.
 Failures are returned to the model for at most two repair attempts, within the existing step budget.
-The GUI shows deterministic check results separately from the model's final prose.
+The GUI shows deterministic check results separately from the model's prose and exposes visible
+unverified, running, passed, and failed states. Agent TDD guides test-first behavior but does not move
+automatic execution authority into the model.
+
+When the command list is empty, the runtime reads small workspace-confined project markers and the
+GUI presents matching commands as compact suggestion controls. Detection does not execute commands,
+follow directory symlinks, or silently save a choice; configuration remains an explicit user action.
 
 Real-time subprocess streaming and skipping arbitrary Plan items are excluded: the current command
 runner returns completed results, and Plan entries are descriptive state rather than scheduled jobs.

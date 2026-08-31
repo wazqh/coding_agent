@@ -5,6 +5,7 @@ __pycache__/
 .pytest_cache/
 pytest-cache-files-*/
 .test-tmp*/
+.tmp-test*/
 .test-runs/
 .coding-agent-data/
 .tmp-data/

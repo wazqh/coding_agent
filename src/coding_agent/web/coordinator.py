@@ -8,7 +8,7 @@ from threading import Event, Lock, Thread
 from typing import Literal, Protocol, cast
 
 from coding_agent.change_ledger import CHANGE_REVIEW_TYPE, review_record
-from coding_agent.controller import RunResult
+from coding_agent.controller import RunResult, VerificationRunResult
 from coding_agent.events import AgentEvent, EventKind
 from coding_agent.memory import MemoryStore
 from coding_agent.runtime_management import (
@@ -51,6 +51,13 @@ class _Controller(Protocol):
     def working(self) -> _Working: ...
 
     def run_turn(self, task: str, *, cancel_event: Event | None = None) -> RunResult: ...
+
+    def run_verification(
+        self,
+        turn_id: str,
+        *,
+        cancel_event: Event | None = None,
+    ) -> VerificationRunResult: ...
 
 
 class _Runtime(Protocol):
@@ -196,6 +203,19 @@ class TurnCoordinator:
 
     def set_verification_commands(self, commands: list[str]) -> RuntimeSnapshot:
         return self._require_idle_management().set_verification_commands(commands)
+
+    def set_verification(
+        self,
+        *,
+        enabled: bool,
+        agent_tdd: bool,
+        commands: list[str],
+    ) -> RuntimeSnapshot:
+        return self._require_idle_management().set_verification(
+            enabled=enabled,
+            agent_tdd=agent_tdd,
+            commands=commands,
+        )
 
     def plan_snapshot(self) -> tuple[object, ...]:
         return tuple(self._require_management().snapshot().plan)
@@ -486,6 +506,77 @@ class TurnCoordinator:
                 data={"status": "failed", "reason": "internal error"},
             )
         finally:
+            with self._lock:
+                self._thread = None
+                self._cancel_event = None
+                self._idle.set()
+
+    def start_verification(self, turn_id: str) -> str:
+        """Run deterministic checks for an existing turn without invoking the model."""
+
+        with self._lock:
+            if self._thread is not None:
+                raise CoordinatorBusyError("a turn is already running")
+            controller = self._ensure_controller()
+            cancel_event = Event()
+            self._cancel_event = cancel_event
+            self._idle.clear()
+            management = self._management
+            if management is not None:
+                management.set_lifecycle(LifecycleState.EXECUTING_TOOL)
+            self._publish(
+                session_id=controller.session_id,
+                turn_id=turn_id,
+                kind=ViewEventType.VERIFICATION_STARTED,
+                data={},
+            )
+            thread = Thread(
+                target=self._run_verification,
+                args=(controller, turn_id, cancel_event),
+                name="forge-web-verification",
+                daemon=True,
+            )
+            self._thread = thread
+            thread.start()
+            return controller.session_id
+
+    def _run_verification(
+        self,
+        controller: _Controller,
+        turn_id: str,
+        cancel_event: Event,
+    ) -> None:
+        status = "failed"
+        try:
+            result = controller.run_verification(turn_id, cancel_event=cancel_event)
+            status = result.status
+            with self._lock:
+                management = self._management
+            if management is not None:
+                lifecycle = {
+                    "passed": LifecycleState.COMPLETED,
+                    "cancelled": LifecycleState.CANCELLED,
+                    "not_configured": LifecycleState.COMPLETED,
+                }.get(status, LifecycleState.FAILED)
+                management.set_lifecycle(lifecycle)
+        except Exception as exc:
+            with self._lock:
+                management = self._management
+            if management is not None:
+                management.set_lifecycle(LifecycleState.FAILED)
+            self._publish(
+                session_id=controller.session_id,
+                turn_id=turn_id,
+                kind=ViewEventType.ERROR,
+                data={"severity": "error", "message": f"{type(exc).__name__}: {exc}"},
+            )
+        finally:
+            self._publish(
+                session_id=controller.session_id,
+                turn_id=turn_id,
+                kind=ViewEventType.VERIFICATION_FINISHED,
+                data={"status": status},
+            )
             with self._lock:
                 self._thread = None
                 self._cancel_event = None

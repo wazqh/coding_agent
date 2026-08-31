@@ -110,6 +110,8 @@ class StepsResetRequest(RequestFrame):
 
 class VerificationSetRequest(RequestFrame):
     type: Literal["verification.set"]
+    enabled: bool = False
+    agent_tdd: bool = False
     commands: list[str] = Field(max_length=8)
 
     @field_validator("commands")
@@ -122,6 +124,11 @@ class VerificationSetRequest(RequestFrame):
                 raise ValueError("verification commands must be non-empty single-line values")
             normalized.append(value)
         return normalized
+
+
+class VerificationRunRequest(RequestFrame):
+    type: Literal["verification.run"]
+    turn_id: str = Field(min_length=1, max_length=128)
 
 
 class PermissionsGetRequest(RequestFrame):
@@ -273,6 +280,7 @@ ClientRequest: TypeAlias = Annotated[
     | StepsSetRequest
     | StepsResetRequest
     | VerificationSetRequest
+    | VerificationRunRequest
     | PermissionsGetRequest
     | PermissionsSetRequest
     | PlanGetRequest
@@ -322,6 +330,8 @@ class ViewEventType(StrEnum):
     CHANGE_RECORDED = "change.recorded"
     CONTEXT_UPDATED = "context.updated"
     TURN_FINISHED = "turn.finished"
+    VERIFICATION_STARTED = "verification.started"
+    VERIFICATION_FINISHED = "verification.finished"
     ERROR = "error"
     FILE_PREVIEWED = "file.previewed"
     CHANGES_UPDATED = "changes.updated"

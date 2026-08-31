@@ -316,6 +316,7 @@ test("keeps unverified completion neutral and reserves success language for real
     {
       id: "done-unverified",
       kind: "completion",
+      turnId: "turn-unverified",
       status: "completed",
       reason: "",
       validationStatus: "not_run",
@@ -328,11 +329,32 @@ test("keeps unverified completion neutral and reserves success language for real
       validationStatus: "passed",
     },
   ];
-  render(<Timeline items={completions} onApproval={() => true} />);
+  const onVerify = vi.fn();
+  render(<Timeline items={completions} onApproval={() => true} onVerify={onVerify} />);
 
-  expect(screen.getByText("已完成")).toBeInTheDocument();
-  expect(screen.queryByText(/未运行验证/)).not.toBeInTheDocument();
-  expect(screen.getByText("完成 · 验证通过")).toBeInTheDocument();
+  expect(screen.getByText("已结束 · 未验证")).toBeInTheDocument();
+  expect(screen.getByText("已完成 · 验证通过")).toBeInTheDocument();
+  expect(screen.getByRole("button", { name: "验证此轮" })).toBeInTheDocument();
+});
+
+test("offers repair for a failed verification with the failed turn id", async () => {
+  const user = userEvent.setup();
+  const onRepair = vi.fn();
+  const failed: TimelineItem[] = [
+    {
+      id: "done-failed-verification",
+      kind: "completion",
+      turnId: "turn-failed",
+      status: "completed",
+      reason: "verification failed after two repair attempts",
+      validationStatus: "failed",
+    },
+  ];
+  render(<Timeline items={failed} onApproval={() => true} onRepair={onRepair} />);
+
+  expect(screen.getByText("已完成 · 验证失败")).toBeInTheDocument();
+  await user.click(screen.getByRole("button", { name: "修复验证失败" }));
+  expect(onRepair).toHaveBeenCalledWith("turn-failed");
 });
 
 test("marks a user message after a completion as the start of a new turn", () => {

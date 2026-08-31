@@ -12,6 +12,8 @@ interface TimelineProps {
   items: TimelineItem[];
   onApproval: (approvalId: string, decision: ApprovalDecision) => boolean;
   approvalAvailable?: boolean;
+  onVerify?: (turnId: string) => void;
+  onRepair?: (turnId: string) => void;
   showRaw?: boolean;
   working?: {
     status: string;
@@ -42,14 +44,18 @@ const workingLabels: Record<string, string> = {
   awaiting_approval: "等待审批",
   executing: "正在执行",
   observing: "正在整理结果",
+  validating: "正在验证",
 };
 
 function completionLabel(item: Extract<TimelineItem, { kind: "completion" }>): string {
+  if (item.validationStatus === "failed" && ["completed", "failed"].includes(item.status)) {
+    return "已完成 · 验证失败";
+  }
   if (item.status === "completed") {
-    if (item.validationStatus === "passed") return "完成 · 验证通过";
-    if (item.validationStatus === "failed") return "完成 · 验证失败";
-    if (item.validationStatus === "incomplete") return "已完成 · 验证未完成";
-    return "已完成";
+    if (item.validationStatus === "passed") return "已完成 · 验证通过";
+    if (item.validationStatus === "failed") return "已完成 · 验证失败";
+    if (item.validationStatus === "incomplete") return "正在验证";
+    return "已结束 · 未验证";
   }
   const terminal =
     item.status === "failed"
@@ -74,6 +80,8 @@ export function Timeline({
   items,
   onApproval,
   approvalAvailable = true,
+  onVerify,
+  onRepair,
   showRaw = false,
   working = null,
 }: TimelineProps) {
@@ -183,6 +191,26 @@ export function Timeline({
         </span>
         <strong>{completionLabel(item)}</strong>
         {item.reason && item.reason !== "assistant completed" ? <small>{item.reason}</small> : null}
+        {item.status === "completed" && item.validationStatus === "not_run" && item.turnId ? (
+          <button
+            type="button"
+            className="completion-action"
+            aria-label="验证此轮"
+            onClick={() => onVerify?.(item.turnId!)}
+          >
+            验证
+          </button>
+        ) : null}
+        {["completed", "failed"].includes(item.status) && item.validationStatus === "failed" && item.turnId ? (
+          <button
+            type="button"
+            className="completion-action is-repair"
+            aria-label="修复验证失败"
+            onClick={() => onRepair?.(item.turnId!)}
+          >
+            修复
+          </button>
+        ) : null}
       </div>,
     );
   });

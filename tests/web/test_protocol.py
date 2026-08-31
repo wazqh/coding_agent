@@ -258,3 +258,28 @@ def test_verification_set_rejects_malformed_commands(commands: list[str]) -> Non
                 "commands": commands,
             }
         )
+
+
+def test_verification_requests_expose_mode_and_manual_run_target() -> None:
+    configured = parse_client_request(
+        {
+            "protocol_version": 2,
+            "type": "verification.set",
+            "request_id": "verification-mode",
+            "enabled": True,
+            "agent_tdd": True,
+            "commands": ["python -m pytest -q"],
+        }
+    )
+    manual = parse_client_request(
+        {
+            "protocol_version": 2,
+            "type": "verification.run",
+            "request_id": "verification-run",
+            "turn_id": "turn-123",
+        }
+    )
+
+    assert configured.enabled is True
+    assert configured.agent_tdd is True
+    assert manual.turn_id == "turn-123"
