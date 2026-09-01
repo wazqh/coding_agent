@@ -156,7 +156,17 @@ def test_legacy_verification_commands_migrate_to_root_checks(tmp_path: Path) -> 
     assert verification.checks[0].id == "legacy-1"
 
 
-@pytest.mark.parametrize("cwd", ["../outside", "/tmp", "C:\\outside", "nested/../../outside"])
+@pytest.mark.parametrize(
+    "cwd",
+    [
+        "../outside",
+        "/tmp",
+        "C:\\outside",
+        "C:outside",
+        "\\\\server\\share",
+        "nested/../../outside",
+    ],
+)
 def test_verification_checks_reject_working_directories_outside_workspace(
     tmp_path: Path,
     cwd: str,
@@ -176,6 +186,34 @@ def test_verification_checks_reject_working_directories_outside_workspace(
                     "kind": "custom",
                     "command": "python -m pytest -q",
                     "cwd": cwd,
+                }
+            ],
+        )
+
+
+@pytest.mark.parametrize(
+    "target_path",
+    ["../outside", "/tmp", "C:\\outside", "C:outside", "\\\\server\\share"],
+)
+def test_verification_checks_reject_target_paths_outside_workspace(
+    tmp_path: Path,
+    target_path: str,
+) -> None:
+    workspace = tmp_path / "repo"
+    workspace.mkdir()
+    store = WorkspaceSettingsStore(data_dir=tmp_path / "data", workspace=workspace)
+
+    with pytest.raises(WorkspaceSettingsError, match="verification"):
+        store.set_verification_checks(
+            enabled=True,
+            agent_tdd=False,
+            checks=[
+                {
+                    "id": "unsafe-target",
+                    "label": "Unsafe target",
+                    "kind": "custom",
+                    "command": "python -m pytest -q",
+                    "target_paths": [target_path],
                 }
             ],
         )

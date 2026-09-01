@@ -368,6 +368,14 @@ def test_command_policy_does_not_block_danger_words_used_as_data(command: str) -
         ("xargs rm -rf", "recursive-delete"),
         ("find . -exec rm -rf {} +", "recursive-delete"),
         ('Invoke-Expression "Remove-Item build -Recurse"', "recursive-delete"),
+        ("FOO=bar rm -rf build", "recursive-delete"),
+        ("command -- rm -rf build", "recursive-delete"),
+        ("sudo -u root rm -rf build", "recursive-delete"),
+        ("env -i FOO=bar rm -rf build", "recursive-delete"),
+        ("git --git-dir=.git reset --hard HEAD", "git-reset-hard"),
+        ("git --no-pager reset --hard HEAD", "git-reset-hard"),
+        ("xargs -n 1 rm -rf", "recursive-delete"),
+        ("del /s build", "recursive-delete"),
         (":(){ :|:& };:", "fork-bomb"),
     ],
 )
@@ -509,6 +517,31 @@ def test_command_timeout_output_bound_and_tool_rejection(tmp_path: Path) -> None
         "risk_label": "强制清理 Git 工作区",
         "matched_text": "git clean -fd",
         "guidance": "先查看 git status 和 git clean -nd，再让用户确认精确目标。",
+    }
+
+
+def test_command_policy_allows_non_destructive_executor_and_device_cases() -> None:
+    policy = CommandPolicy()
+
+    assert policy.classify("find . -maxdepth 1").allowed is True
+    assert policy.classify("dd if=image.bin of=/dev/null").allowed is True
+
+
+def test_run_subprocess_honors_cancellation_before_launch(tmp_path: Path) -> None:
+    result = run_subprocess(
+        f'"{sys.executable}" -c "print(\'must not run\')"',
+        cwd=tmp_path,
+        timeout=10,
+        cancel_requested=lambda: True,
+    )
+
+    assert result == {
+        "exit_code": 130,
+        "stdout": "",
+        "stderr": "",
+        "timed_out": False,
+        "cancelled": True,
+        "truncated": False,
     }
 
 

@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import json
 from collections.abc import Sequence
-from pathlib import Path
+from pathlib import Path, PurePosixPath, PureWindowsPath
 from typing import Literal
 
 from pydantic import (
@@ -21,6 +21,22 @@ from coding_agent.safety.paths import atomic_write_text
 
 class WorkspaceSettingsError(ValueError):
     pass
+
+
+def _workspace_relative_path(raw_value: str, *, field_name: str) -> str:
+    """Normalize a workspace-relative path without trusting the host OS parser alone."""
+    value = raw_value.strip() or "."
+    posix_path = PurePosixPath(value.replace("\\", "/"))
+    windows_path = PureWindowsPath(value)
+    if (
+        posix_path.is_absolute()
+        or windows_path.is_absolute()
+        or bool(windows_path.drive)
+        or ".." in posix_path.parts
+        or ".." in windows_path.parts
+    ):
+        raise ValueError(f"verification {field_name} must stay inside the workspace")
+    return posix_path.as_posix()
 
 
 class VerificationCheck(BaseModel):
@@ -47,22 +63,14 @@ class VerificationCheck(BaseModel):
     @field_validator("cwd")
     @classmethod
     def validate_cwd(cls, cwd: str) -> str:
-        normalized = cwd.strip() or "."
-        path = Path(normalized)
-        if path.is_absolute() or path.root or path.drive or ".." in path.parts:
-            raise ValueError("verification cwd must stay inside the workspace")
-        return path.as_posix()
+        return _workspace_relative_path(cwd, field_name="cwd")
 
     @field_validator("target_paths")
     @classmethod
     def validate_target_paths(cls, paths: list[str]) -> list[str]:
         normalized: list[str] = []
         for raw_path in paths:
-            value = raw_path.strip() or "."
-            path = Path(value)
-            if path.is_absolute() or path.root or path.drive or ".." in path.parts:
-                raise ValueError("verification target paths must stay inside the workspace")
-            display = path.as_posix()
+            display = _workspace_relative_path(raw_path, field_name="target paths")
             if display not in normalized:
                 normalized.append(display)
         return normalized

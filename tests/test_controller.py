@@ -15,6 +15,7 @@ from coding_agent.events import AgentState, EventKind, ModelStreamEvent, ToolCal
 from coding_agent.safety.approval import ApprovalDecision, ApprovalPolicy, ApprovalRequest
 from coding_agent.safety.paths import sha256_file
 from coding_agent.session import SessionError, SessionStore
+from coding_agent.skills import SkillError
 from coding_agent.tools.base import AppliedChange, Tool, ToolContext
 from coding_agent.tools.command import RunCommandArgs
 from coding_agent.tools.filesystem import WriteFileTool
@@ -74,6 +75,13 @@ def make_controller(
         workspace_settings=workspace_settings,
         **({"monotonic": monotonic} if monotonic is not None else {}),
     )
+
+
+def test_session_skill_toggle_reports_when_skills_are_unavailable(settings: Settings) -> None:
+    controller = make_controller(settings, FakeModel([]))
+
+    with pytest.raises(SkillError, match="skills are unavailable"):
+        controller.set_skill_enabled("missing", True)
 
 
 def test_agent_tdd_mode_only_guides_the_agent_while_execution_stays_in_tools(
@@ -1539,6 +1547,48 @@ def test_provider_history_synthesizes_missing_tool_results_in_call_order() -> No
         "call-two",
     ]
     assert "INCOMPLETE_TOOL_CALL" in str(prepared[4]["content"])
+
+
+def test_provider_history_drops_invalid_tool_calls_before_provider_request() -> None:
+    prepared = AgentController._messages_for_model(
+        [
+            {"role": "system", "content": "instructions"},
+            {"role": "user", "content": "continue"},
+            {
+                "role": "assistant",
+                "content": None,
+                "tool_calls": [None, {}, {"id": "", "type": "function"}],
+            },
+            {
+                "role": "assistant",
+                "content": "I will continue safely.",
+                "tool_calls": [
+                    {"type": "function", "function": {"name": "read_file"}},
+                    {
+                        "id": "valid-call",
+                        "type": "function",
+                        "function": {"name": "read_file", "arguments": "{}"},
+                    },
+                ],
+            },
+        ]
+    )
+
+    assert [message["role"] for message in prepared] == [
+        "system",
+        "user",
+        "assistant",
+        "tool",
+    ]
+    assert prepared[2]["tool_calls"] == [
+        {
+            "id": "valid-call",
+            "type": "function",
+            "function": {"name": "read_file", "arguments": "{}"},
+        }
+    ]
+    assert prepared[3]["tool_call_id"] == "valid-call"
+    assert "INCOMPLETE_TOOL_CALL" in str(prepared[3]["content"])
 
 
 def test_budget_exhausted_session_compacts_the_complete_turn_before_continuing(

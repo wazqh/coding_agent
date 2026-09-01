@@ -182,19 +182,18 @@ test("completes the polished two-minute demo path without page overflow", async 
   await expect(page.getByText("完成 · 验证通过")).toBeVisible();
   await page.getByRole("button", { name: "任务检查器" }).click();
   await page.getByRole("tab", { name: "变更" }).click();
-  await expect(page.getByText("Agent 修改 1 处")).toBeVisible();
+  await expect(page.getByText("待审变更 1 项")).toBeVisible();
   await page.getByRole("button", { name: /src\/auth\.py/ }).click();
-  const inspector = page.getByRole("complementary", { name: "任务检查器" });
-  await expect(inspector.getByRole("cell", { name: "fixed = True" })).toBeVisible();
-  await page.getByRole("button", { name: "查看文件" }).click();
-  await expect(page.getByText("13 B")).toBeVisible();
+  const review = page.getByRole("dialog", { name: "src/auth.py 变更审查" });
+  await expect(review.getByRole("cell", { name: "fixed = True" })).toBeVisible();
+  await review.getByRole("button", { name: "关闭变更审查" }).click();
 
   await page.getByRole("button", { name: "关闭检查器" }).click();
   await composer.fill("启动一个可取消的长任务");
   await composer.press("Enter");
   await expect(page.getByRole("button", { name: "停止任务" })).toBeVisible();
   await page.keyboard.press("Escape");
-  await expect(page.getByText("已停止 · 未运行验证")).toBeVisible();
+  await expect(page.getByText("已停止", { exact: true })).toBeVisible();
 
   await page.keyboard.press("Tab");
   await expect(page.locator(":focus")).toBeVisible();

@@ -818,6 +818,18 @@ class AgentController:
                 normalized.append(current)
                 index += 1
                 continue
+            valid_calls = [
+                call
+                for call in calls
+                if isinstance(call, dict) and isinstance(call.get("id"), str) and bool(call["id"])
+            ]
+            if not valid_calls:
+                current.pop("tool_calls", None)
+                if current.get("content") is not None and current.get("content") != "":
+                    normalized.append(current)
+                index += 1
+                continue
+            current["tool_calls"] = valid_calls
             normalized.append(current)
             results: dict[str, dict[str, Any]] = {}
             cursor = index + 1
@@ -827,12 +839,9 @@ class AgentController:
                 if isinstance(call_id, str) and call_id not in results:
                     results[call_id] = result
                 cursor += 1
-            for call in calls:
-                if not isinstance(call, dict):
-                    continue
+            for call in valid_calls:
                 call_id = call.get("id")
-                if not isinstance(call_id, str) or not call_id:
-                    continue
+                assert isinstance(call_id, str)
                 existing = results.get(call_id)
                 if existing is not None:
                     normalized.append(existing)
