@@ -5,6 +5,7 @@ from typing import Any
 
 import pytest
 
+import coding_agent.model_client as model_client_module
 from coding_agent.model_client import ModelClient
 
 
@@ -205,6 +206,43 @@ def test_non_retryable_authentication_error_is_not_retried() -> None:
 
     assert final.type == "error"
     assert len(fake.chat.completions.requests) == 1
+
+
+def test_timeout_is_reported_once_instead_of_repeating_the_full_wait() -> None:
+    class ReadTimeout(RuntimeError):
+        pass
+
+    fake = FakeClient([ReadTimeout("upstream stopped sending data")])
+    client = ModelClient(
+        model="m",
+        api_key="x",
+        client=fake,
+        max_retries=3,
+        request_timeout=45,
+    )
+
+    final = list(client.stream([], []))[-1]
+
+    assert final.type == "error"
+    assert final.error == "model response timed out after 45 seconds; retry or switch model"
+    assert len(fake.chat.completions.requests) == 1
+
+
+def test_real_client_uses_bounded_timeout_and_preserves_it_when_reconfigured(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    created: list[dict[str, Any]] = []
+
+    class RecordingOpenAI:
+        def __init__(self, **kwargs: Any) -> None:
+            created.append(kwargs)
+
+    monkeypatch.setattr(model_client_module, "OpenAI", RecordingOpenAI)
+    client = ModelClient(model="one", api_key="secret", request_timeout=75)
+
+    client.reconfigure(model="two", api_key="next", base_url="https://example.invalid/v1")
+
+    assert [item["timeout"] for item in created] == [75.0, 75.0]
 
 
 @pytest.mark.parametrize(

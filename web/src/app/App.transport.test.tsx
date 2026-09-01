@@ -122,6 +122,54 @@ test("keeps task input gated until the runtime snapshot arrives", async () => {
   expect(screen.getByRole("textbox", { name: "任务输入" })).toBeDisabled();
 });
 
+test("opens inspector command records in the conversation-side detail pane", async () => {
+  const user = userEvent.setup();
+  const transport = new FakeTransport();
+  const store = createAgentStore();
+  render(<App {...baseProps} transport={transport} store={store} />);
+  await waitFor(() => expect(transport.connect).toHaveBeenCalledOnce());
+
+  act(() => {
+    transport.emit({
+      protocol_version: 2,
+      type: "snapshot",
+      seq: 1,
+      session_id: "a".repeat(24),
+      turn_id: null,
+      data: { busy: false, model: "gemini-flash", permissions: "prompt" },
+    });
+    transport.emit({
+      protocol_version: 2,
+      type: "activity.upsert",
+      seq: 2,
+      session_id: "a".repeat(24),
+      turn_id: "turn-1",
+      data: {
+        activity_id: "command-1",
+        kind: "command",
+        title: "运行命令",
+        summary: "command exited with code 0",
+        status: "completed",
+        detail: {
+          code: "OK",
+          data: { command: "python -m pytest -q", cwd: ".", exit_code: 0, stdout: "2 passed" },
+        },
+      },
+    });
+  });
+
+  await user.click(screen.getByRole("button", { name: "任务检查器" }));
+  await user.click(screen.getByRole("tab", { name: "运行" }));
+  const drawer = screen.getByRole("complementary", { name: "任务检查器" });
+  expect(within(drawer).queryByText("python -m pytest -q")).not.toBeInTheDocument();
+  await user.click(within(drawer).getByRole("button", { name: /查看命令详情/ }));
+
+  expect(screen.getByRole("dialog", { name: "命令执行详情" })).toBeInTheDocument();
+  expect(screen.getByText("python -m pytest -q")).toBeInTheDocument();
+  await user.click(screen.getByRole("button", { name: "关闭执行详情" }));
+  expect(screen.queryByRole("dialog", { name: "命令执行详情" })).not.toBeInTheDocument();
+});
+
 test("confirms a maximum-step update after the runtime snapshot applies it", async () => {
   const user = userEvent.setup();
   const transport = new FakeTransport();

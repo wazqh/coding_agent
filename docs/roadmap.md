@@ -1,8 +1,8 @@
 # Delivery status and roadmap
 
 This file records the release state after the Electron desktop integration. Electron is the primary
-graphical frontend; the scrolling TUI remains a first-class fallback and automation surface. The
-loopback React gateway under `web/` is shared desktop infrastructure, not a separately promoted
+and demonstrated product surface. Headless Rich/JSONL commands remain available for automation;
+the loopback React gateway under `web/` is private desktop infrastructure, not a separately promoted
 browser product.
 
 ## Implemented now
@@ -12,8 +12,6 @@ browser product.
   30–999 step budgets, and resumable JSONL sessions.
 - Workspace confinement, hash-guarded atomic writes, visible unified diffs, three-way approvals,
   dangerous-command refusal, secret-stripped child environments, and process-tree cancellation.
-- Scrolling prompt-toolkit/Rich interface with normal terminal history, narrow and `NO_COLOR`
-  rendering, slash/skill/file completion, live status, and Esc cancellation.
 - OpenAI-compatible provider catalog and project-scoped model/permission/step settings, plus Gemini
   function-call compatibility with durable thought signatures.
 - Electron main process that supervises the local Python runtime, keeps the renderer sandboxed,
@@ -63,8 +61,9 @@ browser product.
 2. Run the five-task real-model evaluation three times per task in disposable repositories and
    retain pass rate, tool success, corrections, tokens, latency, memory pollution, skill activation,
    and safety evidence outside Git.
-3. Perform clean-clone acceptance for TUI and Electron: trust, model onboarding, approval choices,
-   cancellation, resume, compact, Memory, Skills, file preview, Diff review, and narrow-window use.
+3. Perform clean-clone Electron acceptance: trust, model onboarding, approval choices,
+   cancellation, resume, compact, Memory, Skills, file preview, Diff review, verification, and
+   narrow-window use. Exercise Rich/JSONL separately as automation contracts.
 4. Confirm `README.txt` remains within 1000 Chinese characters and contains the public repository
    URL. Record the at-most-two-minute, at-most-200-MB MP4 from the exact candidate, then stop pushing
    after the 2026-09-02 24:00 China Standard Time deadline.

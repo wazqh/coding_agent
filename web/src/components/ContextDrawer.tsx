@@ -14,12 +14,12 @@ import type {
 } from "../state/store";
 import { ChangesSummary } from "./ChangesSummary";
 import { ChangeReviewPane } from "./ChangeReviewPane";
-import { CloseIcon } from "./icons";
+import { ActivityDetailPane } from "./ActivityDetailPane";
+import { ChevronIcon, CloseIcon } from "./icons";
 import { ModelManager, type ModelSetupInput, type ModelUpdateInput } from "./ModelManager";
 import { modelOptions } from "./modelProviders";
 import { ResourceFileTree, type ResourceFileStatus } from "./ResourceFileTree";
 import { ResourcePreviewPane } from "./ResourcePreviewPane";
-import { StructuredToolDetail } from "./StructuredToolDetail";
 import { SkillCreator } from "./SkillCreator";
 
 export type InspectorTab = "changes" | "run" | "settings" | "resources" | "context";
@@ -142,6 +142,7 @@ export function ContextDrawer(props: ContextDrawerProps) {
   );
   const [resourceTab, setResourceTab] = useState<"files" | "skills" | "memory">("files");
   const [resourcePreviewPath, setResourcePreviewPath] = useState<string | null>(null);
+  const [selectedActivityId, setSelectedActivityId] = useState<string | null>(null);
   const [skillQuery, setSkillQuery] = useState("");
   const [memoryDraft, setMemoryDraft] = useState("");
   const [clearArmed, setClearArmed] = useState(false);
@@ -181,6 +182,8 @@ export function ContextDrawer(props: ContextDrawerProps) {
     (item): item is Extract<TimelineItem, { kind: "activity" }> =>
       item.kind === "activity" && item.activityKind === "validation",
   );
+  const selectedActivity = [...commandItems, ...validationItems]
+    .find((item) => item.id === selectedActivityId);
   const resourcePaths = useMemo(() => {
     const paths = new Set(changes.map((change) => change.path));
     const visit = (value: unknown, key = "") => {
@@ -221,6 +224,10 @@ export function ContextDrawer(props: ContextDrawerProps) {
       props.onMemoryList();
     }
   }, [tab]);
+
+  useEffect(() => {
+    setSelectedActivityId(null);
+  }, [tab, runPanel]);
 
   useEffect(() => {
     setStepDraft(String(runtime?.steps?.current ?? 40));
@@ -459,10 +466,18 @@ export function ContextDrawer(props: ContextDrawerProps) {
                         <div><strong>命令记录</strong><small>Agent 实际执行的命令、退出状态与结果</small></div>
                       </div>
                       {commandItems.length ? commandItems.map((item) => (
-                        <details key={item.id} className={`run-history-row is-${item.status}`}>
-                          <summary><span>命令</span><strong>{item.summary}</strong><i>{item.status === "completed" ? "完成" : item.status === "failed" ? "失败" : "执行中"}</i></summary>
-                          {item.detail !== undefined ? <StructuredToolDetail detail={item.detail} activityKind={item.activityKind} /> : null}
-                        </details>
+                        <button
+                          key={item.id}
+                          type="button"
+                          className={`run-history-row is-${item.status}`}
+                          aria-label={`查看命令详情：${item.summary}`}
+                          onClick={() => setSelectedActivityId(item.id)}
+                        >
+                          <span>命令</span>
+                          <strong>{item.summary}</strong>
+                          <i>{item.status === "completed" ? "完成" : item.status === "failed" ? "失败" : "执行中"}</i>
+                          <ChevronIcon />
+                        </button>
                       )) : <div className="resource-empty">当前会话还没有命令记录</div>}
                     </section>
                     <div className="inspector-status-card">
@@ -859,10 +874,18 @@ export function ContextDrawer(props: ContextDrawerProps) {
                         <div><strong>验证记录</strong><small>确定性命令的最近执行证据</small></div>
                       </div>
                       {validationItems.length ? validationItems.map((item) => (
-                        <details key={item.id} className={`run-history-row is-${item.status}`}>
-                          <summary><span>验证</span><strong>{item.summary}</strong><i>{item.status === "completed" ? "通过" : item.status === "failed" ? "失败" : "执行中"}</i></summary>
-                          {item.detail !== undefined ? <StructuredToolDetail detail={item.detail} activityKind="validation" /> : null}
-                        </details>
+                        <button
+                          key={item.id}
+                          type="button"
+                          className={`run-history-row is-${item.status}`}
+                          aria-label={`查看验证详情：${item.summary}`}
+                          onClick={() => setSelectedActivityId(item.id)}
+                        >
+                          <span>验证</span>
+                          <strong>{item.summary}</strong>
+                          <i>{item.status === "completed" ? "通过" : item.status === "failed" ? "失败" : "执行中"}</i>
+                          <ChevronIcon />
+                        </button>
                       )) : <div className="resource-empty">当前会话还没有验证记录</div>}
                     </section>
                   </>
@@ -1126,6 +1149,13 @@ export function ContextDrawer(props: ContextDrawerProps) {
           onClose={() => {
             setSelectedId(null);
           }}
+        />
+      ) : null}
+      {tab === "run" && selectedActivity ? (
+        <ActivityDetailPane
+          item={selectedActivity}
+          drawerWidth={props.width}
+          onClose={() => setSelectedActivityId(null)}
         />
       ) : null}
     </aside>

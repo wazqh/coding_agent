@@ -4,7 +4,7 @@
 
 This design replaces the desktop client's project-global verification switch with a durable,
 session-scoped verification contract. It applies to the Electron GUI and the shared local runtime
-used by that GUI. It does not redesign the TUI.
+used by that GUI.
 
 ## Product model
 

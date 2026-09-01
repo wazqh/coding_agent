@@ -9,7 +9,8 @@ from coding_agent.config import ConfigError, load_settings
 
 def test_config_priority_and_untrusted_project(tmp_path: Path) -> None:
     (tmp_path / "coding-agent.toml").write_text(
-        "[agent]\nmax_steps=30\n[model]\nname='project'\n", encoding="utf-8"
+        "[agent]\nmax_steps=30\n[model]\nname='project'\nrequest_timeout=45\n",
+        encoding="utf-8",
     )
     untrusted = load_settings(
         tmp_path,
@@ -28,6 +29,7 @@ def test_config_priority_and_untrusted_project(tmp_path: Path) -> None:
     )
     assert trusted.agent.max_steps == 31
     assert trusted.model.name == "cli"
+    assert trusted.model.request_timeout == 45
 
 
 def test_invalid_config_and_workspace(tmp_path: Path) -> None:

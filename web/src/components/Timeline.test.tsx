@@ -59,6 +59,25 @@ test("renders user, compact activity, expanded markdown, and blocks remote image
   expect(screen.getByRole("button", { name: "允许一次" })).toBeInTheDocument();
 });
 
+test("keeps a command approval summary concise without repeating the command", () => {
+  const command = "python -c \"print('a very long command')\"";
+  const approval: TimelineItem[] = [{
+    id: "approval-command-summary",
+    kind: "approval",
+    approvalId: "approval-command-summary",
+    action: "run_command",
+    subject: command,
+    summary: `run command in D:\\workspaces\\demo: ${command}`,
+    resolved: false,
+  }];
+
+  render(<Timeline items={approval} onApproval={() => true} />);
+
+  expect(screen.getByText(command)).toBeInTheDocument();
+  expect(screen.getByText("run command in D:\\workspaces\\demo")).toBeInTheDocument();
+  expect(screen.queryByText(`run command in D:\\workspaces\\demo: ${command}`)).not.toBeInTheDocument();
+});
+
 test("uses separate user and agent lanes with one grouped execution trace", () => {
   const laneItems: TimelineItem[] = [
     { id: "lane-user", kind: "user", content: "update the README" },
@@ -101,16 +120,20 @@ test("expands an Agent note as rendered Markdown", async () => {
     title: "Agent 说明",
     summary: "先检查实现，再补回归测试。",
     status: "completed",
-    detail: { markdown: "## 排查结果\n\n- 已定位到 `controller.py`" },
+    detail: { markdown: "## 排查结果\n\n**先检查实现**，再补回归测试。\n\n- 已定位到 `controller.py`" },
   }];
 
-  render(<Timeline items={note} onApproval={() => true} />);
+  const view = render(<Timeline items={note} onApproval={() => true} />);
   expect(screen.queryByRole("heading", { name: "排查结果" })).not.toBeInTheDocument();
+  expect(screen.getByText("先检查实现，再补回归测试。")).toBeInTheDocument();
 
   await user.click(screen.getByRole("button", { name: /Agent 说明/ }));
 
   expect(screen.getByRole("heading", { name: "排查结果" })).toBeInTheDocument();
+  expect(screen.getByText("先检查实现")).toHaveStyle({ fontWeight: "bold" });
   expect(screen.getByText("controller.py")).toBeInTheDocument();
+  expect(screen.queryByText("先检查实现，再补回归测试。")).not.toBeInTheDocument();
+  expect(view.container.querySelector(".kind-agent_note .activity-note-detail")).toBeInTheDocument();
 });
 
 test("shows the current plan step and its neighboring steps while work is active", () => {

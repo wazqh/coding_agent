@@ -56,6 +56,7 @@ class ModelSettings(BaseModel):
     base_url: str | None = None
     api_key: str | None = Field(default=None, repr=False)
     max_retries: int = Field(default=3, ge=0, le=6)
+    request_timeout: int = Field(default=60, ge=15, le=600)
 
 
 class Settings(BaseModel):

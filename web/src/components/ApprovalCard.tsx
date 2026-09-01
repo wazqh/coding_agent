@@ -11,6 +11,12 @@ interface ApprovalCardProps {
   available?: boolean;
 }
 
+function conciseSummary(item: Approval): string {
+  if (item.action !== "run_command") return item.summary;
+  const suffix = `: ${item.subject}`;
+  return item.summary.endsWith(suffix) ? item.summary.slice(0, -suffix.length) : item.summary;
+}
+
 export function ApprovalCard({ item, onApproval, available = true }: ApprovalCardProps) {
   const [pending, setPending] = useState<ApprovalDecision | null>(null);
   const [diffOpen, setDiffOpen] = useState(false);
@@ -46,7 +52,7 @@ export function ApprovalCard({ item, onApproval, available = true }: ApprovalCar
         </div>
       </div>
       <code>{item.subject}</code>
-      <p>{item.summary}</p>
+      <p>{conciseSummary(item)}</p>
       {item.diff ? (
         <div className="approval-diff">
           <button

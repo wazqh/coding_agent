@@ -1,26 +1,25 @@
 # Forge Coding Agent
 
-Forge is an original Python 3.11/3.12 local coding agent. It combines an Electron desktop workspace and
-a scrolling professional terminal UI with a locally controlled model-tool-observation loop,
+Forge is an original Python 3.11/3.12 local coding agent. It combines an Electron desktop workspace
+with a locally controlled model-tool-observation loop,
 resumable sessions, approved project memory, lazy `SKILL.md` workflows, and strict workspace safety.
 It does not use an agent framework, hosted code execution, or a remote file service.
 
 ## Install and start
 
-Create a virtual environment and install the package. Provider credentials can be saved from the
-desktop model manager or the TUI's guided `/model add PROVIDER` flow; environment variables remain
-available as explicit process-local overrides:
+Create a virtual environment and install the desktop package. Provider credentials can be saved
+from the desktop model manager; environment variables remain available as explicit process-local
+overrides for headless automation:
 
 ```text
-python -m pip install -e .
+python -m pip install -e ".[desktop]"
 
 # PowerShell
 $env:OPENAI_API_KEY = "..."
 $env:OPENAI_BASE_URL = "https://your-compatible-endpoint/v1"
 $env:CODING_AGENT_MODEL = "your-model"
 
-python -m coding_agent --cwd .
-coding-agent --cwd .
+python -m coding_agent run "Read README.md and summarize it" --cwd . --output rich
 ```
 
 `OPENAI_BASE_URL` and `CODING_AGENT_MODEL` are optional. API keys are not accepted as CLI
@@ -72,7 +71,7 @@ way to start a clean session. Sessions can be deleted in place, together with on
 that carry evidence from that session. A project can be removed from Forge's recent list after
 confirming its exact path; this never deletes workspace files, Git data, sessions, or Memory. The
 desktop uses the same `AgentController`, session store,
-local tools, approval policy, workspace confinement, Memory, and Skills as the TUI.
+local tools, approval policy, workspace confinement, Memory, and Skills as headless automation.
 
 Electron supervises a private loopback Python gateway; it does not run the CLI as a child or move
 model/tool authority into JavaScript. A one-time capability is exchanged for an HttpOnly,
@@ -115,13 +114,11 @@ default_model = "deepseek-chat"
 models = ["deepseek-chat", "deepseek-reasoner"]
 ```
 
-Use `/model add PROVIDER` for guided Base URL, Model ID, and masked API Key setup. Use
-`/model use PROVIDER [MODEL_ID]` to change provider, `/model MODEL_ID` to change the model within
-the current provider, and `/model reload` after editing the catalog. The active
-provider and model are restored on the next launch. `--model` temporarily overrides the restored
-model while retaining the selected provider. A non-empty `api_key_env` value always overrides the
-stored credential for that process. Without `models.toml`, the existing `OPENAI_API_KEY`,
-`OPENAI_BASE_URL`, and `CODING_AGENT_MODEL` flow remains unchanged.
+Use **Task inspector → Settings → Model** for guided Base URL, Model ID, and masked API Key setup.
+The active provider and model are restored on the next launch. `--model` temporarily overrides the
+restored model for headless commands while retaining the selected provider. A non-empty
+`api_key_env` value always overrides the stored credential for that process. Without `models.toml`,
+the existing `OPENAI_API_KEY`, `OPENAI_BASE_URL`, and `CODING_AGENT_MODEL` flow remains unchanged.
 
 The desktop connection manager includes presets for OpenAI, Kimi, DeepSeek, Qwen/DashScope, GLM,
 Hunyuan, Gemini, OpenRouter, and regional Alibaba, Huawei, and Tencent MaaS gateways. Enter the
@@ -129,7 +126,7 @@ Hunyuan, Gemini, OpenRouter, and regional Alibaba, Huawei, and Tencent MaaS gate
 and appends `/chat/completions` itself. For example, use
 `https://open.bigmodel.cn/api/paas/v4`, not a URL ending in `/chat/completions`. The form previews
 the final request URL and offers a one-click correction for common copied endpoints; the Python
-writer enforces the same rule for TUI and imported configurations. Saved models can be edited,
+writer enforces the same rule for imported configurations. Saved models can be edited,
 copied, or deleted. Copying a model adds a sibling model under the same provider: the provider name,
 Base URL, compatibility mode, and operating-system credential remain shared and locked, while the
 form clears and focuses only **Model ID**. No credential enters renderer state or WebSocket traffic.
@@ -159,26 +156,20 @@ the [Gemini OpenAI compatibility documentation](https://ai.google.dev/gemini-api
 [thought-signature guide](https://ai.google.dev/gemini-api/docs/generate-content/thought-signatures).
 The agent does not request or display thought summaries.
 
-## Commands
+## Headless automation
 
 ```text
-coding-agent [--cwd PATH]
 coding-agent run "TASK" [--cwd PATH] [--output rich|jsonl]
 coding-agent resume SESSION_ID [--cwd PATH]
 coding-agent sessions [--output table|json]
 ```
 
-The interactive UI keeps normal terminal scrollback. Enter submits, Ctrl+J or Alt+Enter inserts a
-newline, Ctrl+G opens `$VISUAL`/`$EDITOR`, Ctrl+L clears, Ctrl+C cancels input or an active model or
-command operation, Esc cancels an active model/tool run, and Ctrl+D exits. Cancellation closes the
-model stream, terminates the command process tree, and records a resumable cancelled turn. Completion
-is available for slash commands, `$skills`, and `@workspace/files`.
+The visible product name is **Forge Coding Agent**; `coding-agent` is the stable automation
+executable. Rich output is intended for local scripts and CI, while JSONL provides stable structured
+events. Cancellation closes the model stream, terminates the command process tree, and records a
+resumable cancelled turn.
 
-The visible product name is **Forge Coding Agent**; `coding-agent` is the stable executable name.
-The scrolling TUI uses a branded header, Markdown-rendered streaming responses, plan and approval
-panels, and a prompt-toolkit status bar without entering the terminal's alternate screen.
-
-Interactive management commands are:
+The desktop composer recognizes these management commands without sending them to the model:
 
 | Command | Purpose |
 | --- | --- |
@@ -193,7 +184,7 @@ Interactive management commands are:
 | `/compact` | Compact eligible older context without deleting the JSONL transcript. |
 | `/resume [SESSION_ID]` / `/new` | Pick a recent workspace session or switch by ID; create a clean session. |
 | `/raw [on|off]` | Inspect or set complete, labeled tool details (never a raw JSON dump). |
-| `/clear` / `/exit` | Clear terminal output, or save the session and exit. |
+| `/clear` / `/exit` | Clear the current view, or close the current interaction. |
 
 The local tool registry also exposes `list_symbols`, `find_definition`, and `find_references`.
 Python files use the standard-library AST; TypeScript/JavaScript, C/C++, Rust, Go, Java, and C# use
@@ -201,15 +192,16 @@ a bounded lightweight lexical index. Parsed files are cached by modification tim
 process, all paths remain workspace-confined, and the GUI groups these read-only navigation calls
 with ordinary workspace exploration instead of exposing protocol payloads.
 
-Desktop presentation follows the same evidence-first rule as the TUI: plans are explicit tool
-state, routine read/search activity may be grouped without hiding mutations or failures, approval
+Desktop presentation follows an evidence-first rule: plans are explicit tool state, routine
+read/search activity may be grouped without hiding mutations or failures, approval
 and execution update one operation card, and final model text remains distinct from deterministic
 validation receipts. The interface uses locally bundled fonts, readable secondary-text contrast,
 thin code scrollbars, directory guide lines, keyboard completion, and reduced-motion fallbacks;
 motion never carries status by itself.
 
-Run `/help COMMAND` inside the TUI for usage, scope, and side-effect details. Administrative
-changes report whether they affect only the current session/process or persistent project data.
+Use `/help COMMAND` in the desktop composer for usage, scope, and side-effect details.
+Administrative changes report whether they affect only the current Session/process or persistent
+project data.
 
 ## Configuration
 
@@ -220,8 +212,8 @@ CLI > environment > trusted coding-agent.toml > defaults
 ```
 
 Copy [`coding-agent.toml.example`](coding-agent.toml.example) when project configuration is useful.
-The defaults limit a turn to 24 tool steps, ten minutes, and 120 seconds per command. Valid tool-step
-budgets are 12 through 100. `/steps N` stores an override under Forge's user data directory, keyed
+The defaults limit a turn to 40 tool steps, ten minutes, and 120 seconds per command. Valid tool-step
+budgets are 30 through 999. `/steps N` stores an override under Forge's user data directory, keyed
 by repository identity like project Memory, and never edits the workspace; `/steps reset` restores
 the trusted project value or the default. Non-interactive execution returns code 3 when an approval
 would be required; configuration failures return 2 and user cancellation returns 130.
@@ -239,7 +231,7 @@ demand from its timeline footer; a read-only turn is simply complete and offers 
 action. **Checks** automatically runs only rules whose declared scope intersects that turn's changes.
 **Agent TDD** asks the Agent to create separate framework-native tests and call
 `register_verification` with an explicit project root, command, timeout, and covered paths; the
-deterministic verification layer—not the model—owns execution. Users may also add session-scoped,
+deterministic verification layer—not the model—owns execution. Users may also add Session-scoped,
 natural-language verification procedures, such as “after dependency changes, rerun the existing
 test and build rules.” These procedures are visible, editable, and injected into the Agent prompt.
 Saving a rule authorizes only that exact command in that exact workspace-relative directory for the
@@ -247,7 +239,7 @@ current Session, preventing a second approval dialog when the deterministic laye
 Changed commands or directories still require approval, and no rule can bypass path confinement,
 cancellation, timeout, hard-safety, or Step-budget boundaries.
 
-Automatic and manual results are durable session records tied to the target turn. The GUI preserves
+Automatic and manual results are durable Session records tied to the target turn. The GUI preserves
 exact outcomes—passed tests, test failure, configuration error, approval denial, timeout,
 cancellation, or no applicable rule—instead of flattening them into success/failure prose. Only an
 explicit deterministic verification event counts as evidence; an ordinary Agent-run `pytest` or
@@ -262,8 +254,8 @@ by verification settings or GUI controls.
   escapes are rejected.
 - Edits require a unique old-text match and expected SHA-256. Overwrites also require the expected
   hash. Writes use a same-directory temporary file and atomic replacement.
-- File changes show a unified diff with red/green line backgrounds before approval. The live status
-  pauses to expose an explicit `1 once / 2 session / 3 deny` input prompt.
+- File changes show a unified diff with red/green line backgrounds before approval. The operation
+  card pauses in place with explicit **allow once**, **allow for Session**, and **deny** actions.
 - Destructive commands such as `git reset --hard`, forced `git clean`, recursive removal, disk
   formatting, and shutdown are rejected before execution rather than presented for approval. The
   desktop identifies these as non-overridable hard-safety decisions and shows the attempted command
@@ -291,7 +283,7 @@ and tool schemas, rather than counting only visible chat text.
 
 `/resume` without an ID shows the ten most recent sessions for the current workspace. Restoring a
 session rebuilds its effective model context from the latest compaction snapshot plus subsequent
-messages, while the TUI previews the last three user/assistant turns without replaying tool output.
+messages. The desktop restores final user/assistant messages without replaying tool output.
 Before a request is sent, interrupted histories are normalized in memory for strict compatible
 providers; the durable JSONL transcript is not rewritten.
 

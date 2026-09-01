@@ -26,7 +26,7 @@ README/architecture/roadmap documents.
 - Never persist provider credentials or expose hidden reasoning.
 - Keep workspace `max_steps` project-scoped; make verification mode, rules, procedures, and results
   session-scoped.
-- Do not change TUI presentation in this module.
+- Do not change unrelated presentation surfaces in this module.
 - Use test-first RED/GREEN cycles and run the full Python and web verification matrix before handoff.
 
 ---

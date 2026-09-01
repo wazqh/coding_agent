@@ -1,12 +1,12 @@
 # Architecture
 
-Forge separates desktop and terminal interaction, orchestration, model transport, local tools,
-safety policy, context, persistence, project memory, and skills. All user-visible front ends consume
-the same `AgentEvent` stream, so Electron, TUI, Rich, JSONL, tests, and evaluations observe the same
-behavior.
+Forge separates desktop interaction, headless automation, orchestration, model transport, local
+tools, safety policy, context, persistence, project memory, and skills. Electron consumes the same
+`AgentEvent` stream exposed to Rich/JSONL automation, tests, and evaluations, so presentation never
+owns model or tool authority.
 
 ```text
-CLI / prompt_toolkit / Rich              Electron
+Headless CLI / Rich / JSONL              Electron
              |                         main process
              |                              |
              |                    sandboxed preload IPC
@@ -104,9 +104,11 @@ reasoning. Tool calls execute in model order, and every result returns the fixed
 `summary`, `data`, `retryable`, and `truncated`.
 
 A valid assistant message without tool calls completes the turn. Identical failed calls warn after
-two attempts and stop after the third. A turn is bounded by 24 tool steps and ten minutes by default.
-Connection, timeout, rate-limit, and server failures receive bounded exponential retry in the model
-adapter; authentication and request errors do not. Cancellation closes an active model stream and
+two attempts and stop after the third. A turn is bounded by 40 tool steps and ten minutes by default.
+Connection, rate-limit, and server failures receive bounded exponential retry in the model adapter;
+authentication and request errors do not. A silent model stream is bounded by the configured model
+request timeout (60 seconds by default) and is not replayed automatically, so one stalled provider
+cannot multiply the full wait across retries. Cancellation closes an active model stream and
 terminates the complete command process tree before the cancelled turn is persisted.
 
 ## Persistence controls

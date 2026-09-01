@@ -49,6 +49,23 @@ const hiddenKeys = new Set([
 ]);
 const codeLikeKeys = new Set(["command", "stdout", "stderr", "output", "content", "diff"]);
 
+const verificationStatusLabels: Record<string, string> = {
+  passed: "验证通过",
+  test_failed: "测试未通过",
+  configuration_error: "验证配置有误",
+  approval_denied: "验证未获授权",
+  timed_out: "验证超时",
+  cancelled: "验证已取消",
+};
+
+const checkKindLabels: Record<string, string> = {
+  test: "测试",
+  build: "构建",
+  lint: "代码检查",
+  typecheck: "类型检查",
+  custom: "自定义",
+};
+
 function record(value: unknown): Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value)
     ? value as Record<string, unknown>
@@ -112,6 +129,84 @@ function BlockedCommandDetail({ result }: { result: Record<string, unknown> }) {
   );
 }
 
+function readableResultStatus(result: Record<string, unknown>, data: Record<string, unknown>): string {
+  const verificationStatus = stringValue(data.verification_status);
+  if (verificationStatusLabels[verificationStatus]) return verificationStatusLabels[verificationStatus];
+  if (result.code === "OK") return data.verification === true ? "验证通过" : "执行成功";
+  if (result.code === "COMMAND_FAILED") return data.verification === true ? "测试未通过" : "命令执行失败";
+  if (result.code === "TIMEOUT") return "执行超时";
+  if (result.code === "APPROVAL_DENIED") return "未获执行授权";
+  if (result.code === "CANCELLED") return "执行已取消";
+  return result.code ? "执行未完成" : "执行结果";
+}
+
+function OutputSection({ label, value, error = false }: { label: string; value: unknown; error?: boolean }) {
+  const output = typeof value === "string" ? value.trimEnd() : "";
+  if (!output) return null;
+  return (
+    <section className={`command-result-output${error ? " is-error" : ""}`}>
+      <span>{label}</span>
+      <pre><code>{output}</code></pre>
+    </section>
+  );
+}
+
+function CommandResultDetail({
+  result,
+  activityKind,
+}: {
+  result: Record<string, unknown>;
+  activityKind?: string;
+}) {
+  const data = record(result.data);
+  const check = record(data.verification_check);
+  const command = stringValue(data.command);
+  const cwd = stringValue(data.cwd, ".");
+  const summary = stringValue(result.summary);
+  const checkLabel = stringValue(check.label, stringValue(check.id));
+  const checkKind = stringValue(check.kind);
+  const timeout = typeof check.timeout_seconds === "number" ? check.timeout_seconds : null;
+  const isVerification = activityKind === "validation" || data.verification === true;
+
+  return (
+    <div
+      className="activity-friendly-detail is-command-result"
+      role="group"
+      aria-label={isVerification ? "验证结果详情" : "命令执行详情"}
+    >
+      <header className={`command-result-overview${result.code === "OK" ? " is-success" : " is-failed"}`}>
+        <strong>{readableResultStatus(result, data)}</strong>
+        {summary ? <span>{summary}</span> : null}
+      </header>
+      {command ? (
+        <section className="command-result-command">
+          <span>执行命令</span>
+          <pre><code>{command}</code></pre>
+        </section>
+      ) : null}
+      <dl className="command-result-meta">
+        <div><dt>工作目录</dt><dd><code>{cwd}</code></dd></div>
+        {typeof data.exit_code === "number" ? <div><dt>退出码</dt><dd>{data.exit_code}</dd></div> : null}
+      </dl>
+      <OutputSection label="标准输出" value={data.stdout} />
+      <OutputSection label="错误输出" value={data.stderr} error />
+      {checkLabel ? (
+        <section className="command-result-rule">
+          <span>验证规则</span>
+          <div>
+            <strong>{checkLabel}</strong>
+            <small>
+              {[checkKindLabels[checkKind] ?? checkKind, timeout ? `${timeout} 秒超时` : ""]
+                .filter(Boolean)
+                .join(" · ")}
+            </small>
+          </div>
+        </section>
+      ) : null}
+    </div>
+  );
+}
+
 function labelFor(key: string): string {
   return labels[key] ?? key.replaceAll("_", " ");
 }
@@ -160,8 +255,16 @@ export function StructuredToolDetail({ detail, activityKind }: StructuredToolDet
   const result = record(value);
   const data = record(result.data);
   const blocked = result.code === "DANGEROUS_COMMAND" || data.hard_blocked === true;
+  const isCommandResult = (
+    activityKind === "command" || activityKind === "validation"
+  ) && (
+    typeof data.command === "string"
+    || typeof data.exit_code === "number"
+    || data.verification === true
+  );
 
   if (blocked) return <BlockedCommandDetail result={result} />;
+  if (isCommandResult) return <CommandResultDetail result={result} activityKind={activityKind} />;
 
   return (
     <div className="activity-friendly-detail">

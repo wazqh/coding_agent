@@ -120,6 +120,7 @@ class RuntimeFactory:
             api_key=self.settings.model.api_key,
             base_url=self.settings.model.base_url,
             max_retries=self.settings.model.max_retries,
+            request_timeout=self.settings.model.request_timeout,
             compatibility=compatibility,
         )
         self.model_manager = ModelManager(

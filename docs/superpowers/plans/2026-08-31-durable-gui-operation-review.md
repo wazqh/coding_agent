@@ -15,7 +15,7 @@
 
 ## Global Constraints
 
-- Preserve CLI/TUI compatibility and the local controller/tool loop.
+- Preserve headless CLI compatibility and the local controller/tool loop.
 - No raw JSON or hidden reasoning in user-facing UI.
 - No credentials in events, sessions, logs, or frontend state.
 - Hard safety rules cannot be overridden.

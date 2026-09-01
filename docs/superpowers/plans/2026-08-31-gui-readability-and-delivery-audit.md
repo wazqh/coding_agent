@@ -97,7 +97,7 @@ Run the component tests that cover composer controls, command rendering, file tr
 
 - [x] **Step 1: Inventory public surfaces**
 
-Cross-check CLI/TUI commands, Electron startup, model/provider setup, symbol tools, verification hooks, Session/Memory/Skill behavior, change review, and workspace trust against code and tests.
+Cross-check headless commands, Electron startup, model/provider setup, symbol tools, verification hooks, Session/Memory/Skill behavior, change review, and workspace trust against code and tests.
 
 - [x] **Step 2: Inventory assessment obligations**
 
@@ -126,7 +126,7 @@ Classify real-model evaluation, clean-clone acceptance, video capture, installer
 
 - [x] **Step 1: Rewrite the assessment README**
 
-Keep `README.txt` under 1000 Chinese characters. Include a repository-address placeholder only if the repository URL cannot be discovered locally, exact TUI and Electron launch commands, key differentiators, safety boundary, and credential policy.
+Keep `README.txt` under 1000 Chinese characters. Include a repository-address placeholder only if the repository URL cannot be discovered locally, the exact Electron launch commands, key differentiators, safety boundary, and credential policy.
 
 - [x] **Step 2: Correct the primary README**
 

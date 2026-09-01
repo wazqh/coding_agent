@@ -16,7 +16,7 @@ and after the application is restarted.
 
 - Preserve the local Python controller and its safety boundaries.
 - Do not expose chain-of-thought or raw protocol JSON.
-- Keep CLI and TUI event behavior compatible.
+- Keep headless CLI event behavior compatible.
 - Never persist credentials or secret environment values.
 - Restored undo is permitted only when the current file still matches the recorded post-change hash.
 - Hard safety rules remain non-overridable.

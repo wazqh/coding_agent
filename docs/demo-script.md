@@ -24,9 +24,9 @@ npm run desktop:dev
 | 1:02–1:22 | Open **Run → Verification**. Show the current Session mode, procedure, and the Agent-registered rule's source, covered path, relative project root, command, and timeout—or explicitly add a detected focused suggestion. Explain that saving authorizes only this exact command/root pair, while hard safety still runs first, then show the deterministic receipt. If the first test fails, use **Repair** to show the bounded evidence-fed repair cycle. Briefly contrast this with a read-only turn, which ends as complete without an irrelevant Verify button. Do not claim validation that is not visible. |
 | 1:22–1:38 | Keep the final Markdown answer expanded. Show the concise completion evidence and confirm that plans/actions/results are visible while hidden chain-of-thought is neither requested nor rendered. |
 | 1:38–1:53 | Open **任务检查器 → 变更**, select the changed file, and switch once between unified and side-by-side review. Open **资源** and show the adjacent workspace-confined read-only file preview with line numbers. Do not trigger Undo in the recorded candidate. |
-| 1:53–2:00 | State: “Electron 与 TUI 共用自研 Python AgentController、本地工具、审批、会话、Memory、Skills 和工作区安全边界；Electron 只负责呈现与受限管理。” |
+| 1:53–2:00 | State: “Electron 只负责呈现与受限管理；自研 Python AgentController、本地工具、审批、会话、Memory、Skills 和工作区安全边界全部保留在本地运行时。” |
 
 Before submission, watch the exported file from start to finish. Require MP4, duration at most two
 minutes, size at most 200 MB, legible text, and no API key, token, credential dialog, account path,
 private repository content, unrelated personal data, notification, raw protocol JSON, or hidden
-chain-of-thought. Archive the demonstrated commit and retain a TUI capture fallback outside Git.
+chain-of-thought. Archive the exact demonstrated commit and exported video outside Git.

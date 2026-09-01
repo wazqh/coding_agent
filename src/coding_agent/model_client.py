@@ -45,6 +45,7 @@ class ModelClient:
         api_key: str,
         base_url: str | None = None,
         max_retries: int = 3,
+        request_timeout: float = 60,
         compatibility: Compatibility = "openai",
         client: Any | None = None,
         sleep: Callable[[float], None] = time.sleep,
@@ -54,12 +55,18 @@ class ModelClient:
         self.model = model
         self.base_url = base_url
         self.max_retries = max_retries
+        self.request_timeout = float(request_timeout)
         if compatibility not in {"openai", "gemini"}:
             raise ValueError("compatibility must be openai or gemini")
         self.compatibility = compatibility
         self._sleep = sleep
         # Retry in one place so the controller's configured retry budget is exact.
-        self._client = client or OpenAI(api_key=api_key, base_url=base_url, max_retries=0)
+        self._client = client or OpenAI(
+            api_key=api_key,
+            base_url=base_url,
+            max_retries=0,
+            timeout=self.request_timeout,
+        )
 
     def reconfigure(
         self,
@@ -72,7 +79,12 @@ class ModelClient:
     ) -> None:
         if compatibility not in {"openai", "gemini"}:
             raise ValueError("compatibility must be openai or gemini")
-        replacement = OpenAI(api_key=api_key, base_url=base_url, max_retries=0)
+        replacement = OpenAI(
+            api_key=api_key,
+            base_url=base_url,
+            max_retries=0,
+            timeout=self.request_timeout,
+        )
         self._client = replacement
         self.model = model
         self.base_url = base_url
@@ -136,6 +148,10 @@ class ModelClient:
             return True
         name = type(exc).__name__.lower()
         return any(part in name for part in ("connection", "timeout", "ratelimit"))
+
+    @staticmethod
+    def _is_timeout(exc: Exception) -> bool:
+        return "timeout" in type(exc).__name__.lower()
 
     @staticmethod
     def _tool_buffer(buffers: list[dict[str, Any]], raw_call: Any) -> dict[str, Any]:
@@ -254,6 +270,16 @@ class ModelClient:
                 yield ModelStreamEvent(type="done", finish_reason=finish_reason)
                 return
             except Exception as exc:
+                if self._is_timeout(exc):
+                    timeout = f"{self.request_timeout:g}"
+                    yield ModelStreamEvent(
+                        type="error",
+                        error=(
+                            f"model response timed out after {timeout} seconds; "
+                            "retry or switch model"
+                        ),
+                    )
+                    return
                 if not emitted and attempt < self.max_retries and self._retryable(exc):
                     delay = min(8.0, 0.5 * (2**attempt)) + random.random() * 0.1  # nosec B311
                     self._sleep(delay)

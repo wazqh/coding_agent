@@ -96,7 +96,9 @@ export function ActivityRow({
           {item.count && item.count > 1 ? <span className="activity-count">{item.count}</span> : null}
           <i>{statusLabel}</i>
         </span>
-        <span className="activity-summary">{item.summary}</span>
+        {noteMarkdown !== null && expanded ? null : (
+          <span className="activity-summary">{item.summary}</span>
+        )}
       </span>
       {item.detail !== undefined ? <ChevronIcon className={expanded ? "is-expanded" : ""} /> : null}
     </>
@@ -104,7 +106,7 @@ export function ActivityRow({
 
   return (
     <div
-      className={`activity-row kind-${item.activityKind} is-${item.status}${hardBlocked ? " is-hard-blocked" : ""}`}
+      className={`activity-row kind-${item.activityKind} is-${item.status}${expanded ? " is-expanded" : ""}${hardBlocked ? " is-hard-blocked" : ""}`}
     >
       <span className="activity-status" aria-hidden="true">
         {statusIcon}
