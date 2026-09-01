@@ -841,7 +841,8 @@ class AgentController:
                 cursor += 1
             for call in valid_calls:
                 call_id = call.get("id")
-                assert isinstance(call_id, str)
+                if not isinstance(call_id, str) or not call_id:
+                    continue
                 existing = results.get(call_id)
                 if existing is not None:
                     normalized.append(existing)
